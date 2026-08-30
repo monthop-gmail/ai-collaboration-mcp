@@ -77,7 +77,7 @@ async function run(fn: () => Promise<unknown>) {
 }
 
 export function registerTools(server: McpServer, env: Env): void {
-  const author = () => resolveAuthor(env.STATIC_CLIENT_NAME);
+  const author = () => resolveAuthor(env.STATIC_CLIENT_NAME, env.CLIENT_NAME_ALIASES);
 
   server.registerTool(
     "create_discussion",
