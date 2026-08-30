@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      # test รันกับ D1 จริงในเครื่อง ไม่ต้องมี credential ของ Cloudflare
+      - name: test
+        run: npm test
+
+      # จับกรณีที่ compile ผ่านแต่ bundle ไม่ขึ้น เช่น import ที่ Workers ไม่รองรับ
+      # ซึ่ง tsc มองไม่เห็น
+      - name: build
+        run: npx wrangler deploy --dry-run --outdir /tmp/dry-run

@@ -1,0 +1,29 @@
+{
+  "name": "ai-collaboration-mcp",
+  "version": "0.1.0",
+  "description": "โต๊ะประชุมกลางของ AI ทุกค่าย — MCP server บน Cloudflare Workers + D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:local": "wrangler d1 execute ai-collab --local --file schema.sql",
+    "db:remote": "wrangler d1 execute ai-collab --remote --file schema.sql"
+  },
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260821.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.10.3",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "agents": "^0.21.0",
+    "zod": "^4.4.3"
+  }
+}

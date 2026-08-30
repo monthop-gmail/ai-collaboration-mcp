@@ -1,0 +1,231 @@
+import { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
+import { DEFAULT_WORKSPACE, type Env } from "./env";
+import { resolveAuthor } from "./identity";
+import {
+  MESSAGE_KINDS,
+  RequestError,
+  createDiscussion,
+  getDiscussion,
+  postMessage,
+  readMessages,
+  readWorkspaceContext,
+  type MessageKind,
+} from "./db";
+
+/**
+ * เพดานเริ่มต้นตอนอ่าน
+ *
+ * กระทู้ที่ AI สามตัวคุยกันโตเร็วกว่าที่คิด การคืนทั้งหมดโดยไม่มีเพดานจะกิน
+ * context ของผู้เรียกจนหมดก่อนที่จะมีใคร error
+ */
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
+const Workspace = z
+  .string()
+  .default(DEFAULT_WORKSPACE)
+  .describe(`Workspace id. Defaults to '${DEFAULT_WORKSPACE}'.`);
+
+const Kind = z
+  .enum(MESSAGE_KINDS)
+  .describe(
+    "What this message is: 'proposal' puts an idea forward, 'review' judges " +
+      "someone else's, 'question' asks for input, 'note' records context. " +
+      "Pick the one that matches your intent — other participants filter on it.",
+  );
+
+const Limit = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_LIMIT)
+  .default(DEFAULT_LIMIT)
+  .describe(`Maximum rows to return (1-${MAX_LIMIT}).`);
+
+function formatResult(result: unknown) {
+  const text =
+    typeof result === "string" ? result : JSON.stringify(result, null, 2) ?? String(result);
+  return { content: [{ type: "text" as const, text }] };
+}
+
+/**
+ * ส่งความล้มเหลวกลับเป็น tool error ไม่ใช่ transport error เพื่อให้ model อ่าน
+ * ข้อความแล้วแก้เองได้ เช่นใส่ id ผิดหรืออ้าง seq ที่ไม่มี
+ */
+function formatError(error: unknown) {
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text" as const,
+        text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ],
+  };
+}
+
+async function run(fn: () => Promise<unknown>) {
+  try {
+    return formatResult(await fn());
+  } catch (error) {
+    if (error instanceof RequestError) return formatError(error);
+    // ข้อผิดพลาดที่ไม่ได้เกิดจากคำขอ ต้องเห็นใน log ไม่ใช่กลืนหาย
+    console.error("tool failed", error);
+    return formatError(error);
+  }
+}
+
+export function registerTools(server: McpServer, env: Env): void {
+  const author = () => resolveAuthor(env.STATIC_CLIENT_NAME);
+
+  server.registerTool(
+    "create_discussion",
+    {
+      description:
+        "Open a new discussion in the shared workspace. Use this to put a topic " +
+        "on the table for other AI participants to respond to. Optionally post " +
+        "the opening message at the same time.",
+      inputSchema: z.object({
+        title: z.string().min(1).describe("Short subject line for the discussion"),
+        workspace: Workspace,
+        body: z
+          .string()
+          .optional()
+          .describe("Opening message. Omit to create an empty discussion."),
+        kind: Kind.default("question"),
+      }),
+    },
+    async ({ title, workspace, body, kind }) =>
+      run(async () => {
+        const me = author();
+        const discussion = await createDiscussion(env.DB, workspace, title, me);
+        const opening =
+          body === undefined
+            ? undefined
+            : await postMessage(env.DB, discussion.id, kind, body, me);
+
+        return {
+          discussion_id: discussion.id,
+          workspace: discussion.workspace_id,
+          title: discussion.title,
+          created_by: discussion.created_by,
+          opening_message: opening ? { seq: opening.seq, kind: opening.kind } : null,
+        };
+      }),
+  );
+
+  server.registerTool(
+    "post_message",
+    {
+      description:
+        "Add a message to an existing discussion. Your identity is taken from " +
+        "your connection — you cannot post under another participant's name.",
+      inputSchema: z.object({
+        discussion_id: z.string().min(1).describe("Discussion to post into"),
+        body: z.string().min(1).describe("The message itself"),
+        kind: Kind.default("note"),
+        in_reply_to: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("The 'seq' of the message you are responding to, if any"),
+      }),
+    },
+    async ({ discussion_id, body, kind, in_reply_to }) =>
+      run(async () => {
+        const message = await postMessage(
+          env.DB,
+          discussion_id,
+          kind as MessageKind,
+          body,
+          author(),
+          in_reply_to,
+        );
+        return {
+          message_id: message.id,
+          seq: message.seq,
+          kind: message.kind,
+          author: message.author_name,
+          created_at: message.created_at,
+        };
+      }),
+  );
+
+  server.registerTool(
+    "get_discussion",
+    {
+      description:
+        "Read a discussion. Messages are numbered by 'seq' starting at 1. " +
+        "Pass 'after_seq' with the highest seq you have already seen to fetch " +
+        "only what is new. If 'has_more' is true there are further messages " +
+        "beyond those returned — call again with a higher 'after_seq' rather " +
+        "than drawing conclusions from a partial thread.",
+      inputSchema: z.object({
+        discussion_id: z.string().min(1),
+        after_seq: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("Return messages with seq greater than this. 0 reads from the start."),
+        limit: Limit,
+      }),
+    },
+    async ({ discussion_id, after_seq, limit }) =>
+      run(async () => {
+        const discussion = await getDiscussion(env.DB, discussion_id);
+        const page = await readMessages(env.DB, discussion_id, after_seq, limit);
+
+        return {
+          discussion: {
+            id: discussion.id,
+            workspace: discussion.workspace_id,
+            title: discussion.title,
+            created_by: discussion.created_by,
+            created_at: discussion.created_at,
+          },
+          messages: page.messages,
+          has_more: page.has_more,
+          total: page.total,
+          latest_seq: page.latest_seq,
+          ...(page.has_more
+            ? {
+                warning:
+                  `Showing ${page.messages.length} of ${page.total} messages. ` +
+                  `Call get_discussion again with after_seq=${
+                    page.messages[page.messages.length - 1]?.seq ?? after_seq
+                  } to continue.`,
+              }
+            : {}),
+        };
+      }),
+  );
+
+  server.registerTool(
+    "get_workspace_context",
+    {
+      description:
+        "Catch up on the workspace without reading every discussion. Returns " +
+        "the discussions, who has taken part, and where the latest activity is. " +
+        "Call this first when you join — it is cheaper than reading threads.",
+      inputSchema: z.object({
+        workspace: Workspace,
+        limit: Limit,
+      }),
+    },
+    async ({ workspace, limit }) =>
+      run(async () => {
+        const context = await readWorkspaceContext(env.DB, workspace, limit);
+        return {
+          workspace: context.workspace,
+          you_are: author().name,
+          participants: context.participants,
+          discussions: context.discussions,
+          has_more: context.has_more,
+          total_discussions: context.total_discussions,
+        };
+      }),
+  );
+}

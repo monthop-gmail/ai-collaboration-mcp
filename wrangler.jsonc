@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-collaboration-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-21",
+  "observability": { "enabled": true },
+
+  // D1 ไม่ใช่ KV โดยตั้งใจ
+  //
+  // KV เป็น eventually consistent ซึ่งแปลว่า AI ตัวที่สองอาจอ่านไม่เห็นข้อความที่
+  // ตัวแรกเพิ่งโพสต์ โดยไม่มีใคร error — วัดมาแล้วใน cf-odoo-mcp-server ว่า counter
+  // ของ Cloudflare sync ข้าม isolate ไม่ทันจริง ๆ สำหรับโต๊ะประชุมที่ทั้งหมดขึ้นกับ
+  // "ทุกคนเห็นลำดับเดียวกัน" นั่นคือความล้มเหลวที่มองไม่เห็น D1 มี transaction จริง
+  // KV แยกจากของ cf-odoo-mcp-server โดยตั้งใจ ถึงจะใช้ binding ชื่อเดียวกัน
+  // การใช้ namespace ร่วมกันจะทำให้ client, grant และ token ของสอง server ปนกัน
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "2335fe0795524546967c586517d3d7fa" }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-collab",
+      // ⚠️ ยังไม่ได้สร้าง — ต้องมีสิทธิ์ D1:Edit บน API token ก่อน แล้วรัน
+      //    npx wrangler d1 create ai-collab
+      //    จากนั้นเอา id จริงมาใส่แทนค่านี้ ค่าปัจจุบันใช้ได้เฉพาะ --local
+      "database_id": "PLACEHOLDER-RUN-D1-CREATE-FIRST"
+    }
+  ]
+}
