@@ -48,3 +48,88 @@ CREATE TABLE IF NOT EXISTS messages (
 
 INSERT OR IGNORE INTO workspaces (id, name, created_at)
 VALUES ('ws-001', 'Workspace #001', '2026-08-30T00:00:00.000Z');
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- Phase 2 — สิ่งที่ตกผลึกจากการคุย
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- ข้อสรุปที่เสนอให้ตัดสิน
+--
+-- แยกจาก message เพราะ "เสนอ" กับ "ตัดสินแล้ว" คนละสถานะกัน ข้อความในกระทู้คือ
+-- การถกเถียง ส่วนตารางนี้คือสิ่งที่ต้องผูกพันกันต่อ
+CREATE TABLE IF NOT EXISTS decisions (
+  id            TEXT PRIMARY KEY,
+  workspace_id  TEXT NOT NULL REFERENCES workspaces(id),
+  -- กระทู้ที่เป็นที่มา อาจว่างได้ถ้าตัดสินนอกกระทู้
+  discussion_id TEXT REFERENCES discussions(id),
+  title         TEXT NOT NULL,
+  detail        TEXT NOT NULL,
+
+  -- proposed | approved | rejected
+  --
+  -- MCP สร้างได้เฉพาะ proposed เท่านั้น ไม่มี tool ไหนให้ AI ตั้งเป็น approved
+  -- เพราะ "เสนอ" ไม่เท่ากับ "ตัดสิน" ช่องด้านล่างเผื่อไว้ให้คนอนุมัติ (AC 8)
+  -- ซึ่งยังไม่ได้ทำ
+  status        TEXT NOT NULL,
+
+  proposed_by        TEXT NOT NULL,
+  proposed_by_client TEXT NOT NULL,
+  created_at         TEXT NOT NULL,
+
+  -- ใครเป็นคนเคาะ และเป็นคนหรือ AI — ว่างอยู่จนกว่าจะมีคนอนุมัติ
+  decided_by      TEXT,
+  decided_by_kind TEXT,
+  decided_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_decisions_workspace
+  ON decisions (workspace_id, created_at);
+
+-- งานที่ต้องมีคนทำ
+CREATE TABLE IF NOT EXISTS tasks (
+  id            TEXT PRIMARY KEY,
+  workspace_id  TEXT NOT NULL REFERENCES workspaces(id),
+  discussion_id TEXT REFERENCES discussions(id),
+  title         TEXT NOT NULL,
+  detail        TEXT NOT NULL DEFAULT '',
+
+  -- open | in_progress | blocked | done
+  status        TEXT NOT NULL,
+  -- ชื่อผู้รับผิดชอบ เป็นข้อความอิสระเพราะ agent ปลายทางอาจยังไม่เคยต่อเข้ามา
+  assigned_to   TEXT,
+
+  created_by        TEXT NOT NULL,
+  created_by_client TEXT NOT NULL,
+  created_at        TEXT NOT NULL,
+  -- คนล่าสุดที่แก้ ยังไม่ได้เก็บประวัติทั้งหมด ดู NOTES หัวข้อข้อจำกัด
+  updated_by        TEXT,
+  updated_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_workspace
+  ON tasks (workspace_id, status, created_at);
+
+-- การส่งต่องาน
+--
+-- ไม่ใช่แค่เปลี่ยนชื่อผู้รับผิดชอบ เพราะของที่มีค่าคือ "ทำอะไรไปแล้ว เหลืออะไร
+-- ติดตรงไหน" ซึ่งเป็นสิ่งที่หายไปทุกครั้งเวลาส่งงานกันด้วยการเปลี่ยน field เฉย ๆ
+CREATE TABLE IF NOT EXISTS handoffs (
+  id       TEXT PRIMARY KEY,
+  task_id  TEXT NOT NULL REFERENCES tasks(id),
+  to_whom  TEXT NOT NULL,
+  context  TEXT NOT NULL,
+
+  -- pending | accepted
+  status   TEXT NOT NULL,
+
+  from_name   TEXT NOT NULL,
+  from_client TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+
+  accepted_by     TEXT,
+  accepted_client TEXT,
+  accepted_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_handoffs_task    ON handoffs (task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_handoffs_pending ON handoffs (status, created_at);

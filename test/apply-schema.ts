@@ -35,12 +35,23 @@ export async function applySchema(): Promise<void> {
  * นับกระทู้ได้ 17 แทนที่จะเป็น 4 เพราะของจาก test ก่อนหน้าค้างอยู่ ถ้าไม่ล้างเอง
  * ผลของ test จะขึ้นกับลำดับการรัน ซึ่งพังเงียบเมื่อมีคนเพิ่ม test ใหม่แทรกกลาง
  *
- * ลบตามลำดับการอ้างอิง: message → discussion → workspace
+ * **ลำดับสำคัญ** ต้องลบจากตารางที่อ้างถึงคนอื่น ไปหาตารางที่ถูกอ้าง ไม่งั้นติด
+ * foreign key — เจอมาแล้วตอนเพิ่มตารางของ Phase 2 ซึ่งทำให้ test เดิมพังทั้งไฟล์
+ * ถ้าเพิ่มตารางใหม่ที่มี REFERENCES ต้องเติมไว้ **ก่อน** ตารางที่มันอ้างถึง
  */
+const TABLES_CHILD_FIRST = [
+  "handoffs",   // → tasks
+  "tasks",      // → workspaces, discussions
+  "decisions",  // → workspaces, discussions
+  "messages",   // → discussions
+  "discussions",// → workspaces
+  "workspaces",
+] as const;
+
 export async function resetDatabase(): Promise<void> {
   await applySchema();
-  await env.DB.prepare("DELETE FROM messages").run();
-  await env.DB.prepare("DELETE FROM discussions").run();
-  await env.DB.prepare("DELETE FROM workspaces").run();
+  for (const table of TABLES_CHILD_FIRST) {
+    await env.DB.prepare(`DELETE FROM ${table}`).run();
+  }
   await applySchema();
 }

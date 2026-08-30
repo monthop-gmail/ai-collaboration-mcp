@@ -1,5 +1,8 @@
 /**
- * ทุกคำสั่งที่แตะ D1 อยู่ในไฟล์นี้ไฟล์เดียว
+ * SQL ของฝั่งบทสนทนา — workspace, discussion, message
+ *
+ * ส่วนของ decision, task และ handoff อยู่ใน `db-work.ts` เพราะเปลี่ยนคนละจังหวะกัน
+ * ไม่มี SQL อยู่นอกสองไฟล์นี้
  *
  * ใช้ prepared statement ทุกจุด ไม่มีการต่อ SQL ด้วย string — body ของข้อความ
  * มาจาก AI ภายนอกซึ่งถือเป็น untrusted input เสมอ

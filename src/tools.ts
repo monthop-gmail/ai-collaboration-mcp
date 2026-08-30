@@ -1,10 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { DEFAULT_WORKSPACE, type Env } from "./env";
+import type { Env } from "./env";
 import { resolveAuthor } from "./identity";
 import {
   MESSAGE_KINDS,
-  RequestError,
   createDiscussion,
   getDiscussion,
   postMessage,
@@ -12,20 +11,8 @@ import {
   readWorkspaceContext,
   type MessageKind,
 } from "./db";
-
-/**
- * เพดานเริ่มต้นตอนอ่าน
- *
- * กระทู้ที่ AI สามตัวคุยกันโตเร็วกว่าที่คิด การคืนทั้งหมดโดยไม่มีเพดานจะกิน
- * context ของผู้เรียกจนหมดก่อนที่จะมีใคร error
- */
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
-
-const Workspace = z
-  .string()
-  .default(DEFAULT_WORKSPACE)
-  .describe(`Workspace id. Defaults to '${DEFAULT_WORKSPACE}'.`);
+import { Limit, Workspace, run } from "./tool-kit";
+import { registerWorkTools } from "./tools-work";
 
 const Kind = z
   .enum(MESSAGE_KINDS)
@@ -35,49 +22,10 @@ const Kind = z
       "Pick the one that matches your intent — other participants filter on it.",
   );
 
-const Limit = z
-  .number()
-  .int()
-  .min(1)
-  .max(MAX_LIMIT)
-  .default(DEFAULT_LIMIT)
-  .describe(`Maximum rows to return (1-${MAX_LIMIT}).`);
-
-function formatResult(result: unknown) {
-  const text =
-    typeof result === "string" ? result : JSON.stringify(result, null, 2) ?? String(result);
-  return { content: [{ type: "text" as const, text }] };
-}
-
-/**
- * ส่งความล้มเหลวกลับเป็น tool error ไม่ใช่ transport error เพื่อให้ model อ่าน
- * ข้อความแล้วแก้เองได้ เช่นใส่ id ผิดหรืออ้าง seq ที่ไม่มี
- */
-function formatError(error: unknown) {
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text" as const,
-        text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-      },
-    ],
-  };
-}
-
-async function run(fn: () => Promise<unknown>) {
-  try {
-    return formatResult(await fn());
-  } catch (error) {
-    if (error instanceof RequestError) return formatError(error);
-    // ข้อผิดพลาดที่ไม่ได้เกิดจากคำขอ ต้องเห็นใน log ไม่ใช่กลืนหาย
-    console.error("tool failed", error);
-    return formatError(error);
-  }
-}
-
 export function registerTools(server: McpServer, env: Env): void {
   const author = () => resolveAuthor(env.STATIC_CLIENT_NAME, env.CLIENT_NAME_ALIASES);
+
+  registerWorkTools(server, env);
 
   server.registerTool(
     "create_discussion",
