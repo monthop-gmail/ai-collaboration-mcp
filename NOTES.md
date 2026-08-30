@@ -188,6 +188,38 @@ ChatGPT ตัวเดียว ถ้าแก้ API ไปตั้งแต
 
 การรอเก็บข้อมูลจากโมเดลที่สองก่อนตัดสินใจ คือสิ่งที่กันการแก้ผิดจุดในครั้งนี้
 
+### ChatGPT รับงานต่อ — ปิดวงจรครบ
+
+สั่ง ChatGPT ว่า *"มีงานส่งมาให้เราไหม ถ้ามีรับเลย"* มันเรียก `get_handoffs` แล้ว
+`accept_handoff` เอง
+
+```
+ho-38bb455f   accepted     accepted_by=ChatGPT  client=xj8Z4QvfMH66H__c
+task-c3aaf745 in_progress  assigned_to=ChatGPT  created_by=Gemini  updated_by=ChatGPT
+```
+
+`accepted_client` เป็น client id จริงของ ChatGPT ที่มาจาก OAuth ไม่ใช่ค่าที่ส่งมาใน
+argument — รับแทนคนอื่นไม่ได้
+
+และ**ครั้งนี้ ChatGPT รายงานตรงกับที่เกิดขึ้นจริง** ว่าสถานะถูกเปลี่ยนเป็น `in_progress`
+โดยตัวมันเอง ต่างจากสองครั้งก่อนที่เล่าเกินจากสิ่งที่ทำ เพราะครั้งนี้มันทำจริง
+
+### เส้นทางเต็มที่เกิดขึ้นโดยไม่มีคนแทรกกลาง
+
+```
+ChatGPT  เปิดกระทู้ + เสนอ D1
+   ↓
+Claude   อ่านเห็น รายงานสถานะถูก
+   ↓
+Gemini   review + ผูก in_reply_to เอง
+   ↓
+Gemini   สรุปเป็น decision → task → handoff พร้อมบริบท 634 ตัวอักษร
+   ↓
+ChatGPT  get_handoffs → accept_handoff → in_progress
+```
+
+ไม่มีขั้นตอนไหนที่บอก AI ว่าต้องเรียก tool ไหน ทุกตัวเลือกเองจากคำอธิบายของ tool
+
 ## สิ่งที่ยังพิสูจน์ไม่ได้
 
 **การโพสต์พร้อมกันจริง ๆ** test ยิงเก้าข้อความพร้อมกันแล้วได้เลขครบไม่ซ้ำ แต่นั่นคือ
