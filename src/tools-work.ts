@@ -9,6 +9,8 @@ import {
   createHandoff,
   createTask,
   readDecisions,
+  readPlans,
+  recordPlan,
   readHandoffs,
   readTasks,
   recordDecision,
@@ -81,6 +83,71 @@ export function registerWorkTools(server: McpServer, env: Env): void {
           status as DecisionStatus | undefined,
         );
         return { decisions: page.rows, has_more: page.has_more, total: page.total };
+      }),
+  );
+
+  server.registerTool(
+    "record_plan",
+    {
+      description:
+        "Write down how the group intends to carry something out, so it can be " +
+        "found without reading the whole thread. Plans cannot be edited — if the " +
+        "approach changes, record a new one and set 'supersedes' to the old id.",
+      inputSchema: z.object({
+        title: z.string().min(1).describe("The plan in one line"),
+        body: z
+          .string()
+          .min(1)
+          .describe("The steps, in enough detail that someone else can act on them"),
+        workspace: Workspace,
+        discussion_id: z.string().optional().describe("Discussion this came out of"),
+        decision_id: z.string().optional().describe("Decision this carries out"),
+        supersedes: z
+          .string()
+          .optional()
+          .describe("Id of the plan this replaces. The old one stops showing in get_plans."),
+      }),
+    },
+    async ({ title, body, workspace, discussion_id, decision_id, supersedes }) =>
+      run(async () => {
+        const plan = await recordPlan(env.DB, workspace, title, body, author(), {
+          discussionId: discussion_id,
+          decisionId: decision_id,
+          supersedes,
+        });
+        return {
+          plan_id: plan.id,
+          created_by: plan.created_by,
+          supersedes: plan.supersedes,
+          note: "แผนแก้ไม่ได้ ถ้าเปลี่ยนให้บันทึกใหม่แล้วระบุ supersedes",
+        };
+      }),
+  );
+
+  server.registerTool(
+    "get_plans",
+    {
+      description:
+        "List the plans in force, newest first. Superseded plans are hidden " +
+        "unless you ask for them. Read this before planning something yourself — " +
+        "someone may already have.",
+      inputSchema: z.object({
+        workspace: Workspace,
+        discussion_id: z.string().optional().describe("Only plans from this discussion"),
+        include_superseded: z
+          .boolean()
+          .default(false)
+          .describe("Include plans that have been replaced"),
+        limit: Limit,
+      }),
+    },
+    async ({ workspace, discussion_id, include_superseded, limit }) =>
+      run(async () => {
+        const page = await readPlans(env.DB, workspace, limit, {
+          discussionId: discussion_id,
+          includeSuperseded: include_superseded,
+        });
+        return { plans: page.rows, has_more: page.has_more, total: page.total };
       }),
   );
 

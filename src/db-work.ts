@@ -44,6 +44,19 @@ export interface Task {
   updated_at: string | null;
 }
 
+export interface Plan {
+  id: string;
+  workspace_id: string;
+  discussion_id: string | null;
+  decision_id: string | null;
+  title: string;
+  body: string;
+  supersedes: string | null;
+  created_by: string;
+  created_by_client: string;
+  created_at: string;
+}
+
 export interface Handoff {
   id: string;
   task_id: string;
@@ -462,4 +475,117 @@ export async function acceptHandoff(
     },
     task,
   };
+}
+
+/* ── plan ─────────────────────────────────────────────────────────────── */
+
+async function requireDecision(db: D1Database, id: string): Promise<void> {
+  const row = await db
+    .prepare("SELECT id FROM decisions WHERE id = ?1")
+    .bind(id)
+    .first<{ id: string }>();
+  if (!row) throw new RequestError(`ไม่พบ decision '${id}'`);
+}
+
+/**
+ * บันทึกแผนที่จะลงมือทำ
+ *
+ * แก้ไม่ได้โดยตั้งใจ ถ้าแผนเปลี่ยนให้บันทึกใหม่แล้วชี้ `supersedes` ไปตัวเก่า —
+ * แผนที่แก้ย้อนหลังได้ใช้อ้างอิงไม่ได้ เพราะคนที่ลงมือตามแผนเมื่อวานจะพิสูจน์ไม่ได้
+ * ว่าตอนนั้นแผนเขียนว่าอะไร
+ */
+export async function recordPlan(
+  db: D1Database,
+  workspaceId: string,
+  title: string,
+  body: string,
+  author: Author,
+  links: { discussionId?: string; decisionId?: string; supersedes?: string } = {},
+): Promise<Plan> {
+  await requireWorkspace(db, workspaceId);
+  if (links.discussionId !== undefined) await requireDiscussion(db, links.discussionId);
+  if (links.decisionId !== undefined) await requireDecision(db, links.decisionId);
+
+  if (links.supersedes !== undefined) {
+    const previous = await db
+      .prepare("SELECT id FROM plans WHERE id = ?1")
+      .bind(links.supersedes)
+      .first<{ id: string }>();
+    if (!previous) throw new RequestError(`ไม่พบแผน '${links.supersedes}' ที่จะเขียนทับ`);
+  }
+
+  const plan: Plan = {
+    id: `plan-${crypto.randomUUID()}`,
+    workspace_id: workspaceId,
+    discussion_id: links.discussionId ?? null,
+    decision_id: links.decisionId ?? null,
+    title,
+    body,
+    supersedes: links.supersedes ?? null,
+    created_by: author.name,
+    created_by_client: author.client,
+    created_at: now(),
+  };
+
+  await db
+    .prepare(
+      `INSERT INTO plans
+         (id, workspace_id, discussion_id, decision_id, title, body, supersedes,
+          created_by, created_by_client, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+    )
+    .bind(
+      plan.id,
+      plan.workspace_id,
+      plan.discussion_id,
+      plan.decision_id,
+      plan.title,
+      plan.body,
+      plan.supersedes,
+      plan.created_by,
+      plan.created_by_client,
+      plan.created_at,
+    )
+    .run();
+
+  return plan;
+}
+
+/**
+ * อ่านแผนในเวิร์กสเปซ
+ *
+ * ค่าเริ่มต้นตัดแผนที่ถูกเขียนทับแล้วออก เพราะแผนเก่าที่กองรวมกับแผนใหม่คือกับดัก
+ * เดียวกับผลที่ถูกตัดแล้วดูเหมือนครบ — ผู้อ่านไม่มีทางรู้ว่าอันไหนใช้อยู่
+ */
+export async function readPlans(
+  db: D1Database,
+  workspaceId: string,
+  limit: number,
+  options: { includeSuperseded?: boolean; discussionId?: string } = {},
+): Promise<Page<Plan>> {
+  await requireWorkspace(db, workspaceId);
+
+  const clauses: string[] = [];
+  const params: unknown[] = [workspaceId];
+
+  if (options.discussionId !== undefined) {
+    params.push(options.discussionId);
+    clauses.push(`discussion_id = ?${params.length}`);
+  }
+  if (options.includeSuperseded !== true) {
+    clauses.push(
+      "id NOT IN (SELECT supersedes FROM plans WHERE supersedes IS NOT NULL)",
+    );
+  }
+
+  const where = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
+
+  return paginate<Plan>(
+    db,
+    `SELECT * FROM plans WHERE workspace_id = ?1${where}
+      ORDER BY created_at DESC LIMIT ?${params.length + 1}`,
+    `SELECT COUNT(*) AS n FROM plans WHERE workspace_id = ?1${where}`,
+    params,
+    limit,
+  );
 }

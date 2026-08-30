@@ -133,3 +133,30 @@ CREATE TABLE IF NOT EXISTS handoffs (
 
 CREATE INDEX IF NOT EXISTS idx_handoffs_task    ON handoffs (task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_handoffs_pending ON handoffs (status, created_at);
+
+-- แผนที่จะลงมือทำ
+--
+-- แยกจากข้อความในกระทู้เพราะแผนคือของที่ส่งให้คนไป implement ต้องหาเจอโดยไม่ต้อง
+-- อ่านทั้งกระทู้ ถ้าเป็นข้อความที่ 17 ในกระทู้ที่มี 40 ข้อความ คนที่เพิ่งเข้ามาจะ
+-- ถามว่า "แผนคืออะไร" ไม่ได้ และแผนอาจหลุดออกนอกหน้าที่อ่านมาโดยไม่มีใครรู้
+--
+-- แก้ไม่ได้แต่เขียนทับได้ — ถ้าแผนเปลี่ยนให้บันทึกใหม่แล้วชี้ `supersedes` ไปตัวเก่า
+-- รักษาหลัก append-only เหมือนข้อความ และทำให้ตามรอยได้ว่าแผนเปลี่ยนไปยังไง
+CREATE TABLE IF NOT EXISTS plans (
+  id            TEXT PRIMARY KEY,
+  workspace_id  TEXT NOT NULL REFERENCES workspaces(id),
+  -- กระทู้และข้อสรุปที่เป็นที่มา ว่างได้ทั้งคู่
+  discussion_id TEXT REFERENCES discussions(id),
+  decision_id   TEXT REFERENCES decisions(id),
+  title         TEXT NOT NULL,
+  body          TEXT NOT NULL,
+  -- แผนตัวก่อนที่แผนนี้มาแทน ว่างแปลว่าเป็นแผนแรก
+  supersedes    TEXT REFERENCES plans(id),
+
+  created_by        TEXT NOT NULL,
+  created_by_client TEXT NOT NULL,
+  created_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_workspace  ON plans (workspace_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_plans_supersedes ON plans (supersedes);

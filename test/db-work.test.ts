@@ -10,7 +10,9 @@ import {
   readDecisions,
   readHandoffs,
   readTasks,
+  readPlans,
   recordDecision,
+  recordPlan,
   updateTask,
 } from "../src/db-work";
 
@@ -195,5 +197,88 @@ describe("handoff", () => {
     expect(final.discussion_id).toBe(dis.id);
     expect(final.status).toBe("in_progress");
     expect(final.assigned_to).toBe("Gemini");
+  });
+});
+
+describe("plan", () => {
+  it("บันทึกแล้วอ่านกลับได้ พร้อมผู้เขียนจาก connection", async () => {
+    const p = await recordPlan(env.DB, WS, "ย้ายไป D1", "ขั้นตอนหนึ่งสองสาม", gemini);
+
+    expect(p.created_by).toBe("Gemini");
+    expect(p.created_by_client).toBe("c-gemini");
+    expect(p.supersedes).toBeNull();
+  });
+
+  it("ผูกกับกระทู้และข้อสรุปที่เป็นที่มาได้", async () => {
+    const dis = await createDiscussion(env.DB, WS, "ควรใช้อะไร", chatgpt);
+    const dec = await recordDecision(env.DB, WS, "ใช้ D1", "เหตุผล", chatgpt, dis.id);
+    const p = await recordPlan(env.DB, WS, "แผน", "ขั้นตอน", chatgpt, {
+      discussionId: dis.id,
+      decisionId: dec.id,
+    });
+
+    expect(p.discussion_id).toBe(dis.id);
+    expect(p.decision_id).toBe(dec.id);
+  });
+
+  it.each([
+    ["กระทู้", { discussionId: "ไม่มีจริง" }],
+    ["ข้อสรุป", { decisionId: "ไม่มีจริง" }],
+    ["แผนที่จะเขียนทับ", { supersedes: "ไม่มีจริง" }],
+  ])("ผูกกับ%sที่ไม่มีอยู่ไม่ได้", async (_label, links) => {
+    await expect(
+      recordPlan(env.DB, WS, "แผน", "ขั้นตอน", chatgpt, links),
+    ).rejects.toThrow(RequestError);
+  });
+
+  /**
+   * หัวใจของ Plan — แผนเก่าที่กองรวมกับแผนใหม่คือกับดักเดียวกับผลที่ถูกตัดแล้ว
+   * ดูเหมือนครบ ผู้อ่านไม่มีทางรู้ว่าอันไหนใช้อยู่
+   */
+  it("แผนที่ถูกเขียนทับหายไปจากผลลัพธ์", async () => {
+    const first = await recordPlan(env.DB, WS, "แผนแรก", "แบบเดิม", chatgpt);
+    const second = await recordPlan(env.DB, WS, "แผนใหม่", "แบบใหม่", gemini, {
+      supersedes: first.id,
+    });
+
+    const current = await readPlans(env.DB, WS, 10);
+    expect(current.rows.map((p) => p.id)).toEqual([second.id]);
+    expect(current.total).toBe(1);
+  });
+
+  it("ขอดูของเก่าด้วยก็ได้ และยังตามรอยได้ว่าอะไรแทนอะไร", async () => {
+    const first = await recordPlan(env.DB, WS, "แผนแรก", "แบบเดิม", chatgpt);
+    await recordPlan(env.DB, WS, "แผนใหม่", "แบบใหม่", gemini, { supersedes: first.id });
+
+    const all = await readPlans(env.DB, WS, 10, { includeSuperseded: true });
+    expect(all.total).toBe(2);
+    expect(all.rows.find((p) => p.supersedes === first.id)).toBeDefined();
+  });
+
+  it("เขียนทับต่อกันหลายชั้น เหลือตัวล่าสุดตัวเดียว", async () => {
+    const v1 = await recordPlan(env.DB, WS, "v1", "หนึ่ง", chatgpt);
+    const v2 = await recordPlan(env.DB, WS, "v2", "สอง", chatgpt, { supersedes: v1.id });
+    const v3 = await recordPlan(env.DB, WS, "v3", "สาม", chatgpt, { supersedes: v2.id });
+
+    const current = await readPlans(env.DB, WS, 10);
+    expect(current.rows.map((p) => p.id)).toEqual([v3.id]);
+  });
+
+  it("กรองเฉพาะแผนของกระทู้หนึ่งได้", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+    await recordPlan(env.DB, WS, "ของกระทู้", "x", chatgpt, { discussionId: dis.id });
+    await recordPlan(env.DB, WS, "ลอย ๆ", "y", chatgpt);
+
+    const page = await readPlans(env.DB, WS, 10, { discussionId: dis.id });
+    expect(page.rows.map((p) => p.title)).toEqual(["ของกระทู้"]);
+  });
+
+  it("บอก has_more เมื่อผลถูกตัด", async () => {
+    for (let i = 0; i < 4; i++) await recordPlan(env.DB, WS, `แผน ${i}`, "x", chatgpt);
+
+    const page = await readPlans(env.DB, WS, 2);
+    expect(page.rows).toHaveLength(2);
+    expect(page.has_more).toBe(true);
+    expect(page.total).toBe(4);
   });
 });

@@ -41,6 +41,7 @@ export async function applySchema(): Promise<void> {
  */
 const TABLES_CHILD_FIRST = [
   "handoffs",   // → tasks
+  "plans",      // → workspaces, discussions, decisions, plans
   "tasks",      // → workspaces, discussions
   "decisions",  // → workspaces, discussions
   "messages",   // → discussions
