@@ -122,9 +122,9 @@ test ใช้ `@cloudflare/vitest-pool-workers` เพื่อให้ได�
 | 2. AI B อ่าน discussion เดียวกันได้ | ✅ Claude เห็นสิ่งที่ ChatGPT เพิ่งเขียน |
 | 3. AI C เพิ่มความคิดเห็นได้ | ✅ Gemini ตอบพร้อมผูก `in_reply_to` เอง |
 | 4. ทุก AI เห็น context ล่าสุด | ✅ ChatGPT เห็นคำตอบของ Gemini |
-| 5. บันทึก decision | ✅ ยิงผ่าน curl แล้ว ยังไม่ทดสอบกับ AI จริง |
-| 6. สร้าง task จาก discussion | ✅ เหมือนกัน |
-| 7. handoff ไป agent อื่น | ✅ เหมือนกัน พร้อม `accept_handoff` ให้ปลายทางรับได้จริง |
+| 5. บันทึก decision | ✅ ChatGPT ทำได้เอง |
+| 6. สร้าง task จาก discussion | ✅ ChatGPT ทำได้เอง ผูกกระทู้ถูก |
+| 7. handoff ไป agent อื่น | ⚠️ ยิงผ่าน curl ได้ แต่ **ChatGPT ทำไม่สำเร็จและรายงานว่าทำแล้ว** ดู [NOTES](NOTES.md) |
 | 8. human approve/reject | ยังไม่ทำ ต้องมีหน้าเว็บ ไม่ใช่แค่ MCP |
 | 9. audit trail | บางส่วน — ข้อความเก็บผู้เขียนและเวลาแล้ว แต่ยังแยกเป็นรายคนไม่ได้ |
 | 10. รันด้วย Docker Compose | ไม่ทำ — ใช้ Cloudflare Workers แทน ดูเหตุผลข้างล่าง |

@@ -16,7 +16,7 @@ import {
   type DecisionStatus,
   type TaskStatus,
 } from "./db-work";
-import { Limit, Workspace, run } from "./tool-kit";
+import { Limit, Workspace, handoffReminder, run } from "./tool-kit";
 
 const Detail = z.string().describe("Full reasoning or context. Be specific — this is what a participant who was not present will read.");
 
@@ -99,7 +99,11 @@ export function registerWorkTools(server: McpServer, env: Env): void {
         assigned_to: z
           .string()
           .optional()
-          .describe("Who should do it. Leave empty if nobody is assigned yet."),
+          .describe(
+            "Who should do it, if that is already settled. This records ownership " +
+              "only — it is NOT a handoff and sends them no context. To hand work " +
+              "over, create the task and then call create_handoff.",
+          ),
       }),
     },
     async ({ title, detail, workspace, discussion_id, assigned_to }) =>
@@ -118,6 +122,11 @@ export function registerWorkTools(server: McpServer, env: Env): void {
           status: task.status,
           assigned_to: task.assigned_to,
           created_by: task.created_by,
+          // ระบุออกมาตรง ๆ ว่ายังไม่มี handoff เพื่อไม่ให้ผู้เรียกเล่าว่าส่งต่อแล้ว
+          handoff: null,
+          ...(handoffReminder(task.assigned_to)
+            ? { note: handoffReminder(task.assigned_to) }
+            : {}),
         };
       }),
   );
@@ -131,7 +140,10 @@ export function registerWorkTools(server: McpServer, env: Env): void {
       inputSchema: z.object({
         task_id: z.string().min(1),
         status: z.enum(TASK_STATUSES).optional(),
-        assigned_to: z.string().optional(),
+        assigned_to: z
+          .string()
+          .optional()
+          .describe("Change the owner. Records ownership only — not a handoff."),
         detail: z.string().optional(),
       }),
     },
@@ -148,6 +160,10 @@ export function registerWorkTools(server: McpServer, env: Env): void {
           assigned_to: task.assigned_to,
           updated_by: task.updated_by,
           updated_at: task.updated_at,
+          // เตือนเฉพาะตอนที่ผู้เรียกเปลี่ยนผู้รับผิดชอบเองในคำสั่งนี้
+          ...(assigned_to !== undefined && handoffReminder(assigned_to)
+            ? { note: handoffReminder(assigned_to) }
+            : {}),
         };
       }),
   );

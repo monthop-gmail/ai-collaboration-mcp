@@ -64,3 +64,26 @@ export async function run(fn: () => Promise<unknown>) {
     return formatError(error);
   }
 }
+
+/**
+ * เตือนว่าการตั้งผู้รับผิดชอบไม่ใช่การส่งต่องาน
+ *
+ * ทั้งสองอย่างชอบธรรมคนละแบบ — บางงานรู้เจ้าของตั้งแต่แรก แต่ปลายทางจะไม่เห็นงาน
+ * ใน `get_handoffs` และไม่มีบริบทว่าต้องทำอะไรต่อ
+ *
+ * มีข้อความนี้เพราะเจอจริง: ChatGPT ถูกสั่งให้ "สร้าง task ส่งต่อให้ Gemini" แล้วมัน
+ * ใส่ `assigned_to` ตอนสร้าง จากนั้นรายงานว่าส่งต่อแล้ว ทั้งที่ไม่มี handoff อยู่เลย
+ * — ตรวจจาก `updated_by` ที่ยังเป็น null จึงรู้ว่า `create_handoff` ไม่เคยถูกเรียก
+ *
+ * server ห้ามไม่ได้ว่า agent จะทำอะไร แต่คืนความจริงให้มันอ่านได้ เพื่อไม่ให้เล่าสิ่งที่
+ * ไม่ได้เกิดขึ้น — หลักการเดียวกับการอ่าน record กลับมาหลังเขียน
+ */
+export function handoffReminder(assignedTo: string | null | undefined): string | undefined {
+  if (typeof assignedTo !== "string" || assignedTo.trim() === "") return undefined;
+
+  return (
+    `Assigned to '${assignedTo}', but no handoff was created. They will not see ` +
+    "this task in get_handoffs and have no context about what is already done or " +
+    "what is left. If you meant to hand work over, call create_handoff."
+  );
+}
