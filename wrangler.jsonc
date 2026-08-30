@@ -21,10 +21,7 @@
     {
       "binding": "DB",
       "database_name": "ai-collab",
-      // ⚠️ ยังไม่ได้สร้าง — ต้องมีสิทธิ์ D1:Edit บน API token ก่อน แล้วรัน
-      //    npx wrangler d1 create ai-collab
-      //    จากนั้นเอา id จริงมาใส่แทนค่านี้ ค่าปัจจุบันใช้ได้เฉพาะ --local
-      "database_id": "PLACEHOLDER-RUN-D1-CREATE-FIRST"
+      "database_id": "242e0af3-ba78-4587-bb3f-10f30fddb3d3"
     }
   ]
 }

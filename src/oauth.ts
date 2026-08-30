@@ -110,9 +110,34 @@ async function handleAuthorize(request: Request, env: OAuthEnv): Promise<Respons
   }
 
   if (request.method === "GET") {
-    const authRequest = await env.OAUTH_PROVIDER.parseAuthRequest(request);
+    // คำขอที่พารามิเตอร์ไม่ครบหรืออ้าง client ที่ไม่มีอยู่ ต้องได้ 400 ที่บอก
+    // สาเหตุ ไม่ใช่ 500 ที่ debug ไม่ได้ — ตอน client ต่อไม่ติด ข้อความตรงนี้คือ
+    // สิ่งเดียวที่ผู้ใช้มีให้ดู
+    let authRequest: AuthRequest;
+    try {
+      authRequest = await env.OAUTH_PROVIDER.parseAuthRequest(request);
+    } catch (error) {
+      return json(
+        {
+          error: "invalid_request",
+          detail: error instanceof Error ? error.message : String(error),
+        },
+        400,
+      );
+    }
+
     const client = await env.OAUTH_PROVIDER.lookupClient(authRequest.clientId);
-    return consentPage(authRequest, client?.clientName ?? authRequest.clientId);
+    if (!client) {
+      return json(
+        {
+          error: "invalid_client",
+          detail: `ไม่รู้จัก client_id '${authRequest.clientId}' — ต้องลงทะเบียนที่ /register ก่อน`,
+        },
+        400,
+      );
+    }
+
+    return consentPage(authRequest, client.clientName ?? authRequest.clientId);
   }
 
   const form = await request.formData();
