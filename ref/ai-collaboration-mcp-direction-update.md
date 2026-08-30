@@ -160,3 +160,11 @@ Common Collaboration Model
 **สรุป:** ตอนนี้ยังไม่ต้องทำให้ใหญ่ครับ ขอให้ทำ “โต๊ะประชุมกลางของ AI” ให้ใช้งานจริงก่อน แล้วค่อยต่อ Plan → Decision → Task/Handoff → Agent Platform ภายหลัง
 
 ผมว่า message นี้ส่งให้ทีมได้เลยจร้า โดยเฉพาะ **ข้อ 5 สำคัญที่สุด** — เราควรพิสูจน์ของจริงก่อน แล้วค่อยขยาย architecture ครับ.
+
+---
+
+## แนวทาง Phase ถัดไป (ทีมแจ้งเพิ่ม)
+
+ถ้าจะส่งทีมต่อ ผมแนะนำสั้น ๆ ว่า:
+
+Phase ถัดไปไม่ต้องขยาย feature ก่อน ให้ freeze contract ชุด Collaboration → Decision/Plan → Task → Handoff แล้วทดสอบ integration กับ Agent Platform จริง เพื่อพิสูจน์ว่า MCP เป็น collaboration layer และ Agent Platform เป็น execution/orchestration layer ตาม boundary ที่ตกลงกัน
