@@ -116,6 +116,19 @@ AI Collaboration MCP  →  Agent Platform  →  Harness  →  GitHub / Tools
 | `CLIENT_NAME_ALIASES` | แก้ป้ายชื่อที่แสดง เช่น `Google=Gemini` คั่นหลายคู่ด้วย comma — เปลี่ยนแค่ชื่อ ไม่แตะ `client_id` ที่เป็นตัวตนจริง |
 | `ALLOWED_ORIGIN_HOSTNAMES` | hostname ที่ยอมให้ browser เรียก `/mcp` |
 
+## ทดสอบกับ client อะไรมาแล้วบ้าง
+
+| ค่าย | วิธีต่อ | ผล |
+| --- | --- | --- |
+| ChatGPT · Gemini · Claude | **OAuth (DCR)** | ✅ คุยและส่งงานกันครบวง |
+| Cursor · Grok | **OAuth (DCR)** | ✅ เข้าร่วมกระทู้เดิมได้ |
+| Dify | **OAuth (DCR)** | ✅ ต่อได้ เห็น 14 tools (ต้องสร้างแอปใน Dify ก่อนถึงจะมีหน้าแชต) |
+| Manus | **header** `X-Client-Name` | ✅ |
+| Claude Code · curl | **header** (bearer) | ✅ |
+
+**หกในแปดใช้ OAuth** และทุกตัวลงทะเบียนเองผ่าน DCR โดยไม่ต้องตั้งค่าอะไรเพิ่มฝั่ง
+server รายละเอียดใน [NOTES.md](NOTES.md#หกค่ายในโต๊ะเดียว-และเรื่องความน่าเชื่อถือของชื่อ)
+
 ## ต่อ client ที่ตั้ง header ได้แต่ไม่รองรับ OAuth
 
 client อย่าง Manus ตั้ง `Authorization` เองได้แต่ไม่มี OAuth เส้นทางนี้จึงไม่มีตัวตน
