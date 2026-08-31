@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetDatabase } from "./apply-schema";
-import { RequestError, createDiscussion } from "../src/db";
+import { RequestError, createDiscussion, readMessages } from "../src/db";
 import {
   acceptHandoff,
   createHandoff,
@@ -13,6 +13,7 @@ import {
   readPlans,
   recordDecision,
   recordPlan,
+  resolveDecision,
   updateTask,
 } from "../src/db-work";
 
@@ -280,5 +281,114 @@ describe("plan", () => {
     expect(page.rows).toHaveLength(2);
     expect(page.has_more).toBe(true);
     expect(page.total).toBe(4);
+  });
+});
+
+describe("ปิด decision", () => {
+  async function proposed() {
+    const dis = await createDiscussion(env.DB, WS, "ควรใช้อะไร", chatgpt);
+    const dec = await recordDecision(env.DB, WS, "ใช้ D1", "เหตุผล", chatgpt, dis.id);
+    return { dis, dec };
+  }
+
+  it("อนุมัติแล้วบันทึกผู้ปิดและเหตุผล", async () => {
+    const { dec } = await proposed();
+    const { decision } = await resolveDecision(
+      env.DB, dec.id, "approved", "ทีมเห็นพ้อง", claude,
+    );
+
+    expect(decision.status).toBe("approved");
+    expect(decision.decided_by).toBe("Claude");
+    expect(decision.decided_by_client).toBe("c-claude");
+    expect(decision.decided_reason).toBe("ทีมเห็นพ้อง");
+    expect(decision.decided_at).not.toBeNull();
+  });
+
+  it("ปฏิเสธของที่ซ้ำได้ — ปัญหาที่ Cursor ชนจริง", async () => {
+    const { dec } = await proposed();
+    const { decision } = await resolveDecision(
+      env.DB, dec.id, "rejected", "ซ้ำกับอีกอัน", claude,
+    );
+    expect(decision.status).toBe("rejected");
+
+    const stillOpen = await readDecisions(env.DB, WS, 10, "proposed");
+    expect(stillOpen.total).toBe(0);
+  });
+
+  /**
+   * ไม่มีรหัส = `relayed` ไม่ใช่ `human` ผู้เรียกยกระดับตัวเองไม่ได้ เพราะวัดมาแล้วว่า
+   * สิ่งที่ agent รายงานเกี่ยวกับการกระทำของตัวเองเชื่อไม่ได้
+   */
+  it("ไม่ส่งรหัสมา ได้ relayed", async () => {
+    const { dec } = await proposed();
+    const { decision } = await resolveDecision(env.DB, dec.id, "approved", "x", claude);
+    expect(decision.decided_by_kind).toBe("relayed");
+  });
+
+  it("ส่งรหัสถูก ได้ human", async () => {
+    const { dec } = await proposed();
+    const { decision } = await resolveDecision(
+      env.DB, dec.id, "approved", "x", claude, { code: "s3cret", secret: "s3cret" },
+    );
+    expect(decision.decided_by_kind).toBe("human");
+  });
+
+  /** พิมพ์รหัสผิดแล้วได้ผลที่อ่อนกว่าที่ตั้งใจโดยไม่มีใครบอก คือความล้มเหลวแบบเงียบ */
+  it("ส่งรหัสผิด ต้อง error ไม่ใช่ลดชั้นเงียบ ๆ", async () => {
+    const { dec } = await proposed();
+    await expect(
+      resolveDecision(env.DB, dec.id, "approved", "x", claude, {
+        code: "ผิด", secret: "s3cret",
+      }),
+    ).rejects.toThrow(RequestError);
+
+    const after = await readDecisions(env.DB, WS, 10, "proposed");
+    expect(after.total).toBe(1);
+  });
+
+  it("ส่งรหัสมาแต่เซิร์ฟเวอร์ไม่ได้ตั้งไว้ ต้อง error", async () => {
+    const { dec } = await proposed();
+    await expect(
+      resolveDecision(env.DB, dec.id, "approved", "x", claude, { code: "อะไรก็ได้" }),
+    ).rejects.toThrow(RequestError);
+  });
+
+  it("ปิดซ้ำไม่ได้ และบอกว่าใครปิดไปแล้ว", async () => {
+    const { dec } = await proposed();
+    await resolveDecision(env.DB, dec.id, "approved", "x", claude);
+
+    await expect(
+      resolveDecision(env.DB, dec.id, "rejected", "y", gemini),
+    ).rejects.toThrow(/Claude/);
+  });
+
+  it("ประกาศกลับเข้ากระทู้ให้ทุกคนเห็น", async () => {
+    const { dis, dec } = await proposed();
+    const before = await readMessages(env.DB, dis.id, 0, 50);
+
+    const { announced } = await resolveDecision(
+      env.DB, dec.id, "approved", "ทีมเห็นพ้อง", claude,
+    );
+
+    const after = await readMessages(env.DB, dis.id, 0, 50);
+    expect(announced).toBe(true);
+    expect(after.total).toBe(before.total + 1);
+    expect(after.messages.at(-1)!.body).toContain("ทีมเห็นพ้อง");
+    expect(after.messages.at(-1)!.author_name).toBe("Claude");
+  });
+
+  it("decision ที่ไม่ได้ผูกกระทู้ ก็ปิดได้ แค่ไม่มีที่ประกาศ", async () => {
+    const dec = await recordDecision(env.DB, WS, "ลอย ๆ", "เหตุผล", chatgpt);
+    const { announced, decision } = await resolveDecision(
+      env.DB, dec.id, "approved", "x", claude,
+    );
+    expect(announced).toBe(false);
+    expect(decision.status).toBe("approved");
+  });
+
+  it("ปิด decision ที่ไม่มีอยู่ ต้อง error", async () => {
+    await expect(
+      resolveDecision(env.DB, "ไม่มีจริง", "approved", "x", claude),
+    ).rejects.toThrow(RequestError);
   });
 });

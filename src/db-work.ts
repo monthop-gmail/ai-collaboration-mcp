@@ -6,7 +6,7 @@
  * ไม่ใช่จาก argument
  */
 
-import { RequestError, type Author } from "./db";
+import { RequestError, postMessage, type Author } from "./db";
 
 export const DECISION_STATUSES = ["proposed", "approved", "rejected"] as const;
 export type DecisionStatus = (typeof DECISION_STATUSES)[number];
@@ -25,9 +25,19 @@ export interface Decision {
   proposed_by_client: string;
   created_at: string;
   decided_by: string | null;
-  decided_by_kind: string | null;
+  decided_by_client: string | null;
+  decided_by_kind: DecidedByKind | null;
+  decided_reason: string | null;
   decided_at: string | null;
 }
+
+/**
+ * ระดับของหลักฐานว่าใครเป็นคนปิด decision
+ *
+ * ไม่ใช่คำประกาศของผู้เรียก — server กำหนดจากสิ่งที่พิสูจน์ได้ ผู้เรียกยกระดับตัวเอง
+ * ไม่ได้ ด้วยเหตุผลเดียวกับที่ผู้เขียนข้อความมาจาก connection ไม่ใช่จาก argument
+ */
+export type DecidedByKind = "human" | "relayed" | "ai";
 
 export interface Task {
   id: string;
@@ -122,7 +132,9 @@ export async function recordDecision(
     proposed_by_client: author.client,
     created_at: now(),
     decided_by: null,
+    decided_by_client: null,
     decided_by_kind: null,
+    decided_reason: null,
     decided_at: null,
   };
 
@@ -588,4 +600,91 @@ export async function readPlans(
     params,
     limit,
   );
+}
+
+/**
+ * ปิด decision — อนุมัติหรือปฏิเสธ
+ *
+ * ปิดได้ครั้งเดียว เรียกซ้ำจะบอกว่าใครปิดไปแล้วเมื่อไหร่ แทนการเขียนทับเงียบ ๆ
+ * เพราะประวัติการตัดสินใจที่เปลี่ยนย้อนหลังได้ใช้อ้างอิงไม่ได้
+ *
+ * ระดับของหลักฐานมาจากรหัสที่ส่งมา ไม่ใช่จากที่ผู้เรียกบอก — ถ้าส่งรหัสมาแต่ผิด
+ * จะ error ไม่ใช่ลดชั้นให้เงียบ ๆ เพราะการพิมพ์รหัสผิดแล้วได้ผลลัพธ์ที่อ่อนกว่าที่
+ * ตั้งใจ โดยไม่มีใครบอก คือความล้มเหลวแบบเดียวกับที่ไล่แก้มาทั้งโปรเจกต์
+ */
+export async function resolveDecision(
+  db: D1Database,
+  decisionId: string,
+  verdict: "approved" | "rejected",
+  reason: string,
+  author: Author,
+  approval: { code?: string; secret?: string } = {},
+): Promise<{ decision: Decision; announced: boolean }> {
+  const existing = await db
+    .prepare("SELECT * FROM decisions WHERE id = ?1")
+    .bind(decisionId)
+    .first<Decision>();
+  if (!existing) throw new RequestError(`ไม่พบ decision '${decisionId}'`);
+
+  if (existing.status !== "proposed") {
+    throw new RequestError(
+      `decision นี้ถูกปิดไปแล้วเป็น '${existing.status}' โดย ${existing.decided_by} ` +
+        `เมื่อ ${existing.decided_at}`,
+    );
+  }
+
+  let kind: DecidedByKind = "relayed";
+  if (approval.code !== undefined) {
+    if (!approval.secret) {
+      throw new RequestError(
+        "เซิร์ฟเวอร์ยังไม่ได้ตั้ง APPROVAL_SECRET จึงตรวจรหัสไม่ได้ — ถ้าจะปิดโดยไม่ยืนยัน ให้ไม่ต้องส่ง approval_code",
+      );
+    }
+    if (approval.code !== approval.secret) {
+      throw new RequestError("approval_code ไม่ถูกต้อง — ไม่ได้ปิด decision ให้");
+    }
+    kind = "human";
+  }
+
+  const decidedAt = now();
+  await db
+    .prepare(
+      `UPDATE decisions
+          SET status = ?1, decided_by = ?2, decided_by_client = ?3,
+              decided_by_kind = ?4, decided_reason = ?5, decided_at = ?6
+        WHERE id = ?7`,
+    )
+    .bind(verdict, author.name, author.client, kind, reason, decidedAt, decisionId)
+    .run();
+
+  // ประกาศกลับเข้ากระทู้ต้นทาง เพื่อให้ทุกคนที่อยู่ในโต๊ะเห็นว่าเรื่องนี้ปิดแล้ว
+  // โดยไม่ต้องคอยเรียก get_decisions เอง — เป็นสิ่งที่หน้าเว็บแยกต่างหากทำให้ไม่ได้
+  let announced = false;
+  if (existing.discussion_id) {
+    const label = verdict === "approved" ? "อนุมัติ" : "ปฏิเสธ";
+    const evidence =
+      kind === "human" ? "ยืนยันด้วยรหัสแล้ว" : "ตามที่ผู้ใช้สั่งผ่านไคลเอนต์ ยังไม่ได้ยืนยัน";
+    await postMessage(
+      db,
+      existing.discussion_id,
+      "note",
+      `[${label} decision] ${existing.title}\n\nเหตุผล: ${reason}\n\n` +
+        `ปิดโดย ${author.name} (${evidence}) — ${decisionId}`,
+      author,
+    );
+    announced = true;
+  }
+
+  return {
+    decision: {
+      ...existing,
+      status: verdict,
+      decided_by: author.name,
+      decided_by_client: author.client,
+      decided_by_kind: kind,
+      decided_reason: reason,
+      decided_at: decidedAt,
+    },
+    announced,
+  };
 }

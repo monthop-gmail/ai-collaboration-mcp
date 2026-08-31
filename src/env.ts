@@ -13,6 +13,14 @@ export interface Env {
    * รูปแบบ `ชื่อที่ส่งมา=ชื่อที่จะแสดง` คั่นด้วย comma เช่น `Google=Gemini`
    */
   CLIENT_NAME_ALIASES?: string;
+  /**
+   * รหัสที่พิสูจน์ว่าคนอยู่ตรงนั้นจริงตอนปิด decision
+   *
+   * แยกจาก `MCP_AUTH_TOKEN` โดยตั้งใจ และ **ห้ามใส่ในเครื่องมือของ client ตัวไหน**
+   * — ค่านี้มีความหมายก็ต่อเมื่อมีแต่คนเท่านั้นที่รู้ ถ้าไม่ตั้งไว้ ทุกการปิดจะถูก
+   * บันทึกเป็น `relayed` ซึ่งใช้งานได้ปกติ เพียงแต่ยืนยันไม่ได้
+   */
+  APPROVAL_SECRET?: string;
   /** hostname ที่ยอมให้ browser เรียก /mcp ได้ */
   ALLOWED_ORIGIN_HOSTNAMES?: string;
 }

@@ -11,6 +11,7 @@ import {
   readDecisions,
   readPlans,
   recordPlan,
+  resolveDecision,
   readHandoffs,
   readTasks,
   recordDecision,
@@ -83,6 +84,57 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           status as DecisionStatus | undefined,
         );
         return { decisions: page.rows, has_more: page.has_more, total: page.total };
+      }),
+  );
+
+  server.registerTool(
+    "resolve_decision",
+    {
+      description:
+        "Close a decision as approved or rejected — use this to settle which " +
+        "proposal stands and to clear duplicates. A decision can only be closed " +
+        "once. Who closed it and how strongly that is evidenced are recorded by " +
+        "the server, not chosen by you.",
+      inputSchema: z.object({
+        decision_id: z.string().min(1),
+        verdict: z
+          .enum(["approved", "rejected"])
+          .describe("'approved' means this one stands; 'rejected' retires it"),
+        reason: z
+          .string()
+          .min(1)
+          .describe("Why. Someone reading this next month needs it to make sense."),
+        approval_code: z
+          .string()
+          .optional()
+          .describe(
+            "Only if a person handed you the server's approval code. Do not guess " +
+              "or reuse one — a wrong code fails the call instead of closing anything. " +
+              "Without it the closure is recorded as relayed, which is fine.",
+          ),
+      }),
+    },
+    async ({ decision_id, verdict, reason, approval_code }) =>
+      run(async () => {
+        const { decision, announced } = await resolveDecision(
+          env.DB,
+          decision_id,
+          verdict,
+          reason,
+          author(),
+          { code: approval_code, secret: env.APPROVAL_SECRET },
+        );
+        return {
+          decision_id: decision.id,
+          status: decision.status,
+          decided_by: decision.decided_by,
+          decided_by_kind: decision.decided_by_kind,
+          announced_in_discussion: announced,
+          note:
+            decision.decided_by_kind === "human"
+              ? "ยืนยันด้วยรหัสแล้ว บันทึกเป็นการตัดสินใจของคน"
+              : "บันทึกเป็น relayed — เชื่อว่ามีคนสั่ง แต่ยังไม่มีอะไรยืนยัน",
+        };
       }),
   );
 

@@ -76,9 +76,20 @@ CREATE TABLE IF NOT EXISTS decisions (
   proposed_by_client TEXT NOT NULL,
   created_at         TEXT NOT NULL,
 
-  -- ใครเป็นคนเคาะ และเป็นคนหรือ AI — ว่างอยู่จนกว่าจะมีคนอนุมัติ
-  decided_by      TEXT,
+  -- ใครเป็นคนเคาะ ว่างอยู่จนกว่าจะมีการปิด
+  decided_by        TEXT,
+  decided_by_client TEXT,
+
+  -- human | relayed | ai — **ระดับของหลักฐาน ไม่ใช่คำประกาศของผู้เรียก**
+  --
+  -- human   ผู้เรียกส่ง APPROVAL_SECRET ที่ถูกต้องมาด้วย พิสูจน์ได้ว่าคนอยู่ตรงนั้น
+  -- relayed AI บอกว่าคนสั่งให้ปิด แต่ไม่มีอะไรยืนยัน เชื่อเท่าที่เชื่อ AI ตัวนั้น
+  -- ai      AI ตัดสินเอง
+  --
+  -- server เป็นคนกำหนดค่านี้จากหลักฐาน ผู้เรียกเลือกเองไม่ได้ เพราะวัดมาแล้วว่า
+  -- สิ่งที่ agent รายงานเกี่ยวกับการกระทำของตัวเองเชื่อไม่ได้
   decided_by_kind TEXT,
+  decided_reason  TEXT,
   decided_at      TEXT
 );
 
