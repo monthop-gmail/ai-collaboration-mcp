@@ -11,6 +11,19 @@
 
 import { getMcpAuthContext } from "agents/mcp/server";
 
+/**
+ * ชื่อของผู้ที่เข้ามาทางเส้น static bearer ซึ่งไม่มี identity จาก OAuth
+ *
+ * `source` สำคัญกว่าที่เห็น — `config` ผู้ดูแลเซิร์ฟเวอร์เป็นคนตั้ง จึงเชื่อได้เท่า
+ * ที่เชื่อผู้ดูแล ส่วน `header` ตัว client ส่งมาเอง **ปลอมได้** ใครถือ token ก็
+ * ประกาศตัวเป็นชื่ออะไรก็ได้ ค่านี้จึงถูกเขียนแยกไว้ใน `client` เพื่อให้คนอ่านตาราง
+ * แยกออกว่าแถวไหนเชื่อถือได้แค่ไหน
+ */
+export interface StaticIdentity {
+  name: string;
+  source: "config" | "header";
+}
+
 export interface Author {
   /** client id ที่ออกให้ตอนลงทะเบียน DCR — เสถียรกว่าชื่อที่ client ตั้งเอง */
   client: string;
@@ -67,10 +80,15 @@ function readProps(props: Record<string, unknown>): AuthorProps | undefined {
  * ตั้งชื่อให้ผ่าน `STATIC_CLIENT_NAME` ได้ ไม่งั้นข้อความจากเส้นทางนั้นจะกองรวมกัน
  * เป็นชื่อเดียวโดยแยกไม่ออกว่าเครื่องไหน
  */
-export function resolveAuthor(staticName?: string, nameAliases?: string): Author {
+export function resolveAuthor(
+  staticIdentity?: StaticIdentity,
+  nameAliases?: string,
+): Author {
   const props = getMcpAuthContext()?.props;
   const parsed = props ? readProps(props) : undefined;
 
+  // OAuth ชนะเสมอ — client ที่ผ่าน OAuth แล้วส่ง header ชื่ออื่นมาด้วย จะปลอมตัว
+  // เป็นคนอื่นไม่ได้
   if (parsed) {
     const aliases = parseAliases(nameAliases);
     return {
@@ -79,6 +97,47 @@ export function resolveAuthor(staticName?: string, nameAliases?: string): Author
     };
   }
 
-  const name = staticName?.trim();
-  return { client: "static-bearer", name: name && name !== "" ? name : "Static bearer" };
+  if (!staticIdentity) return { client: "static-bearer", name: "Static bearer" };
+
+  return {
+    client:
+      staticIdentity.source === "header"
+        ? `static-header:${staticIdentity.name}`
+        : "static-bearer",
+    name: staticIdentity.name,
+  };
+}
+
+/** ความยาวสูงสุดของชื่อที่รับจาก header กันไม่ให้ยัดข้อความยาว ๆ เข้ามาเป็นชื่อ */
+const MAX_HEADER_NAME = 64;
+
+/**
+ * อ่านชื่อที่ client ส่งมาเองทาง `X-Client-Name`
+ *
+ * มีไว้ให้ client ที่ตั้ง header ได้แต่ไม่รองรับ OAuth (เช่น Manus) มีชื่อของตัวเอง
+ * แทนที่จะกองรวมกับทุกคนที่เข้าทางเดียวกัน
+ *
+ * ตัดอักขระควบคุมออกเพราะขึ้นบรรทัดใหม่ในชื่อทำให้ตารางที่คนอ่านเพี้ยน และจำกัดความยาว
+ * ไว้ ค่านี้ไม่ได้พิสูจน์อะไรทั้งสิ้น — เป็นแค่ป้ายชื่อที่ผู้ถือ token เลือกเอง
+ */
+export function readClientNameHeader(request: Request): StaticIdentity | undefined {
+  const raw = request.headers.get("x-client-name");
+  if (raw === null) return undefined;
+
+  const cleaned = raw.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+  if (cleaned === "") return undefined;
+
+  return { name: cleaned.slice(0, MAX_HEADER_NAME), source: "header" };
+}
+
+/** ชื่อที่จะใช้เมื่อไม่ได้มาทาง OAuth — header ที่ client ส่งมา หรือค่าที่ผู้ดูแลตั้งไว้ */
+export function staticIdentityFor(
+  request: Request,
+  configuredName: string | undefined,
+): StaticIdentity | undefined {
+  const fromHeader = readClientNameHeader(request);
+  if (fromHeader) return fromHeader;
+
+  const configured = configuredName?.trim();
+  return configured ? { name: configured, source: "config" } : undefined;
 }

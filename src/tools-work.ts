@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Env } from "./env";
-import { resolveAuthor } from "./identity";
+import { resolveAuthor, type StaticIdentity } from "./identity";
 import {
   DECISION_STATUSES,
   TASK_STATUSES,
@@ -23,8 +23,8 @@ import { Limit, Workspace, handoffReminder, run } from "./tool-kit";
 const Detail = z.string().describe("Full reasoning or context. Be specific — this is what a participant who was not present will read.");
 
 /** tools ของ Phase 2 — สิ่งที่ตกผลึกจากการคุยแล้วต้องมีคนทำต่อ */
-export function registerWorkTools(server: McpServer, env: Env): void {
-  const author = () => resolveAuthor(env.STATIC_CLIENT_NAME, env.CLIENT_NAME_ALIASES);
+export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
+  const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
 
   server.registerTool(
     "record_decision",

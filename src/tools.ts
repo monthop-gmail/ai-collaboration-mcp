@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Env } from "./env";
-import { resolveAuthor } from "./identity";
+import { resolveAuthor, type StaticIdentity } from "./identity";
 import {
   MESSAGE_KINDS,
   createDiscussion,
@@ -22,10 +22,10 @@ const Kind = z
       "Pick the one that matches your intent — other participants filter on it.",
   );
 
-export function registerTools(server: McpServer, env: Env): void {
-  const author = () => resolveAuthor(env.STATIC_CLIENT_NAME, env.CLIENT_NAME_ALIASES);
+export function registerTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
+  const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
 
-  registerWorkTools(server, env);
+  registerWorkTools(server, env, staticIdentity);
 
   server.registerTool(
     "create_discussion",

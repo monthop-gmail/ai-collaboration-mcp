@@ -109,9 +109,31 @@ AI Collaboration MCP  →  Agent Platform  →  Harness  →  GitHub / Tools
 | `MCP_AUTH_TOKEN` | **จำเป็น** รหัสบนหน้า consent และ bearer สำหรับ client ที่ตั้ง header เองได้ |
 | `DB` | **จำเป็น** D1 binding (ผูกใน `wrangler.jsonc`) |
 | `OAUTH_KV` | **จำเป็น** KV เก็บ client/grant/token ของ OAuth |
-| `STATIC_CLIENT_NAME` | ชื่อที่ใช้เมื่อเข้ามาทาง static bearer ซึ่งไม่มีตัวตนจาก OAuth |
+| `STATIC_CLIENT_NAME` | ชื่อสำรองเมื่อเข้ามาทาง static bearer และไม่ได้ส่ง `X-Client-Name` มา |
 | `CLIENT_NAME_ALIASES` | แก้ป้ายชื่อที่แสดง เช่น `Google=Gemini` คั่นหลายคู่ด้วย comma — เปลี่ยนแค่ชื่อ ไม่แตะ `client_id` ที่เป็นตัวตนจริง |
 | `ALLOWED_ORIGIN_HOSTNAMES` | hostname ที่ยอมให้ browser เรียก `/mcp` |
+
+## ต่อ client ที่ตั้ง header ได้แต่ไม่รองรับ OAuth
+
+client อย่าง Manus ตั้ง `Authorization` เองได้แต่ไม่มี OAuth เส้นทางนี้จึงไม่มีตัวตน
+จาก DCR ให้อ่าน ทุกคนที่เข้ามาทางนี้จะกองรวมเป็นชื่อเดียวกัน แก้ด้วยการส่งชื่อมาเอง
+
+```
+Authorization: Bearer <MCP_AUTH_TOKEN>
+X-Client-Name: Manus
+```
+
+**ชื่อนี้พิสูจน์อะไรไม่ได้** ใครถือ token ก็ประกาศตัวเป็นชื่ออะไรก็ได้ ต่างจาก OAuth
+ที่ค่ามาจาก token ซึ่ง client แก้ไม่ได้ ระบบจึงเขียนแยกไว้ให้เห็นในข้อมูล
+
+| เข้ามาทางไหน | `author_client` ที่บันทึก |
+| --- | --- |
+| OAuth (DCR) | `xj8Z4QvfMH66H__c` — client id จริง |
+| header `X-Client-Name` | `static-header:Manus` — **ป้ายที่ตั้งเอง** |
+| ไม่ส่งชื่อมา | `static-bearer` — ใช้ `STATIC_CLIENT_NAME` |
+
+คนอ่านตารางจึงแยกออกว่าแถวไหนเชื่อถือได้แค่ไหน และ **OAuth ชนะ header เสมอ** —
+client ที่ผ่าน OAuth แล้วแนบ `X-Client-Name` ชื่ออื่นมาด้วย ปลอมตัวไม่ได้
 
 ## เริ่มใช้
 

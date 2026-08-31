@@ -11,7 +11,11 @@ vi.mock("agents/mcp/server", () => ({
   getMcpAuthContext: () => authContext.value,
 }));
 
-const { resolveAuthor } = await import("../src/identity");
+const { resolveAuthor, readClientNameHeader, staticIdentityFor } =
+  await import("../src/identity");
+
+const config = (name: string) => ({ name, source: "config" as const });
+const header = (name: string) => ({ name, source: "header" as const });
 
 function withProps(props: unknown) {
   authContext.value = props === undefined ? undefined : { props };
@@ -45,12 +49,22 @@ describe("เส้น static bearer ที่ไม่มี OAuth", () => {
 
   it("ตั้งชื่อผ่าน STATIC_CLIENT_NAME ได้", () => {
     withProps(undefined);
-    expect(resolveAuthor("Claude Code").name).toBe("Claude Code");
+    expect(resolveAuthor(config("Claude Code"))).toEqual({
+      client: "static-bearer",
+      name: "Claude Code",
+    });
   });
 
-  it("ชื่อที่มีแต่ช่องว่างถือว่าไม่ได้ตั้ง", () => {
+  /**
+   * ชื่อจาก header ปลอมได้ ใครถือ token ก็ประกาศตัวเป็นอะไรก็ได้ จึงต้องแยกให้เห็น
+   * ใน `client` ว่าแถวนี้เชื่อถือได้น้อยกว่าแถวที่มาจาก OAuth
+   */
+  it("ชื่อจาก header ถูกทำเครื่องหมายว่ามาจาก header", () => {
     withProps(undefined);
-    expect(resolveAuthor("   ").name).toBe("Static bearer");
+    expect(resolveAuthor(header("Manus"))).toEqual({
+      client: "static-header:Manus",
+      name: "Manus",
+    });
   });
 });
 
@@ -115,6 +129,70 @@ describe("แก้ชื่อที่แสดงผ่าน CLIENT_NAME_ALI
 
   it("ไม่แตะเส้น static bearer", () => {
     withProps(undefined);
-    expect(resolveAuthor("Claude Code", "Claude Code=อย่างอื่น").name).toBe("Claude Code");
+    expect(resolveAuthor(config("Claude Code"), "Claude Code=อย่างอื่น").name).toBe(
+      "Claude Code",
+    );
+  });
+});
+
+function requestWith(headers: Record<string, string>): Request {
+  return new Request("https://example.com/mcp", { headers });
+}
+
+describe("อ่านชื่อจาก X-Client-Name", () => {
+  it("อ่านชื่อธรรมดาได้", () => {
+    expect(readClientNameHeader(requestWith({ "x-client-name": "Manus" }))).toEqual(
+      header("Manus"),
+    );
+  });
+
+  it.each([
+    ["ไม่มี header", {}],
+    ["ค่าว่าง", { "x-client-name": "" }],
+    ["มีแต่ช่องว่าง", { "x-client-name": "   " }],
+  ])("%s → ไม่ได้ชื่อ", (_label, headers) => {
+    expect(readClientNameHeader(requestWith(headers))).toBeUndefined();
+  });
+
+  /**
+   * อักขระควบคุมจริง ๆ อย่าง NUL หรือขึ้นบรรทัดใหม่ ถูกปฏิเสธตั้งแต่ชั้น HTTP แล้ว
+   * (`new Request` โยน `Invalid header value`) ตัวที่ผ่านเข้ามาได้จริงคือพวกที่
+   * มองไม่เห็นอย่าง zero-width space ซึ่งใช้ทำให้ชื่อดูเหมือนคนอื่นได้ทั้งที่คนละค่า
+   */
+  it("ตัดอักขระที่มองไม่เห็นออก กันชื่อที่ดูเหมือนกันแต่คนละค่า", () => {
+    const got = readClientNameHeader(requestWith({ "x-client-name": "Ma\u200Bnus" }));
+    expect(got?.name).toBe("Manus");
+  });
+
+  it("ตัดชื่อที่ยาวเกินให้เหลือ 64 ตัว", () => {
+    const long = "ก".repeat(200);
+    expect(readClientNameHeader(requestWith({ "x-client-name": long }))?.name).toHaveLength(64);
+  });
+});
+
+describe("ลำดับความสำคัญของชื่อสำรอง", () => {
+  it("header ชนะค่าที่ผู้ดูแลตั้งไว้", () => {
+    const got = staticIdentityFor(requestWith({ "x-client-name": "Manus" }), "Claude Code");
+    expect(got).toEqual(header("Manus"));
+  });
+
+  it("ไม่มี header ก็ใช้ค่าที่ผู้ดูแลตั้ง", () => {
+    expect(staticIdentityFor(requestWith({}), "Claude Code")).toEqual(config("Claude Code"));
+  });
+
+  it("ไม่มีทั้งคู่ ก็ไม่มีชื่อ", () => {
+    expect(staticIdentityFor(requestWith({}), undefined)).toBeUndefined();
+  });
+
+  /**
+   * ข้อสำคัญที่สุด — client ที่ผ่าน OAuth แล้วแนบ header ชื่ออื่นมาด้วย ต้องปลอมตัว
+   * เป็นคนอื่นไม่ได้
+   */
+  it("OAuth ชนะ header เสมอ", () => {
+    withProps({ clientId: "abc123", clientName: "Gemini" });
+    expect(resolveAuthor(header("ขอเป็น ChatGPT"))).toEqual({
+      client: "abc123",
+      name: "Gemini",
+    });
   });
 });
