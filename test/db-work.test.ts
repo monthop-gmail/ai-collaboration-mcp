@@ -392,3 +392,73 @@ describe("ปิด decision", () => {
     ).rejects.toThrow(RequestError);
   });
 });
+
+describe("ชี้ทางว่าตัวที่ตกไปถูกแทนด้วยอันไหน", () => {
+  async function twoProposed() {
+    const dis = await createDiscussion(env.DB, WS, "ควรใช้อะไร", chatgpt);
+    const keep = await recordDecision(env.DB, WS, "ตัวจริง", "เหตุผล", chatgpt, dis.id);
+    const dup = await recordDecision(env.DB, WS, "ตัวซ้ำ", "เหตุผล", gemini, dis.id);
+    return { dis, keep, dup };
+  }
+
+  it("ปฏิเสธพร้อมชี้ไปหาตัวที่ใช้อยู่", async () => {
+    const { keep, dup } = await twoProposed();
+    const { decision } = await resolveDecision(
+      env.DB, dup.id, "rejected", "ซ้ำ", claude, {}, keep.id,
+    );
+    expect(decision.superseded_by).toBe(keep.id);
+  });
+
+  /**
+   * หัวใจของ field นี้ — Mistral ปฏิเสธสามอันแล้วให้ทั้งสามอ้างถึงกันเองวนไปวนมา
+   * คนอ่านตามไปแล้วหาตัวจริงไม่เจอ ถ้าห้ามชี้ไปหาตัวที่ตกไปแล้ว วงกลมเกิดไม่ได้เลย
+   */
+  it("ชี้ไปหาตัวที่ถูกปฏิเสธไปแล้วไม่ได้ — กันวงกลม", async () => {
+    const { keep, dup } = await twoProposed();
+    await resolveDecision(env.DB, dup.id, "rejected", "ซ้ำ", claude, {}, keep.id);
+
+    const third = await recordDecision(env.DB, WS, "อีกตัว", "เหตุผล", chatgpt);
+    await expect(
+      resolveDecision(env.DB, third.id, "rejected", "ซ้ำ", claude, {}, dup.id),
+    ).rejects.toThrow(/ถูกปฏิเสธไปแล้ว/);
+  });
+
+  it("ชี้กลับมาที่ตัวเองไม่ได้", async () => {
+    const { dup } = await twoProposed();
+    await expect(
+      resolveDecision(env.DB, dup.id, "rejected", "ซ้ำ", claude, {}, dup.id),
+    ).rejects.toThrow(RequestError);
+  });
+
+  it("ชี้ไปหา id ที่ไม่มีอยู่ไม่ได้", async () => {
+    const { dup } = await twoProposed();
+    await expect(
+      resolveDecision(env.DB, dup.id, "rejected", "ซ้ำ", claude, {}, "ไม่มีจริง"),
+    ).rejects.toThrow(RequestError);
+  });
+
+  it("ชี้ไปหาตัวที่ approved แล้วได้ เพราะยังใช้อยู่", async () => {
+    const { keep, dup } = await twoProposed();
+    await resolveDecision(env.DB, keep.id, "approved", "เอาอันนี้", claude);
+    const { decision } = await resolveDecision(
+      env.DB, dup.id, "rejected", "ซ้ำ", claude, {}, keep.id,
+    );
+    expect(decision.superseded_by).toBe(keep.id);
+  });
+
+  it("ไม่ระบุก็ได้ สำหรับการปฏิเสธที่ไม่มีอะไรมาแทน", async () => {
+    const { dup } = await twoProposed();
+    const { decision } = await resolveDecision(
+      env.DB, dup.id, "rejected", "ทีมไม่เอาแนวนี้แล้ว", claude,
+    );
+    expect(decision.superseded_by).toBeNull();
+  });
+
+  it("ประกาศในกระทู้บอกด้วยว่าให้ไปดูอันไหนแทน", async () => {
+    const { dis, keep, dup } = await twoProposed();
+    await resolveDecision(env.DB, dup.id, "rejected", "ซ้ำ", claude, {}, keep.id);
+
+    const page = await readMessages(env.DB, dis.id, 0, 50);
+    expect(page.messages.at(-1)!.body).toContain(keep.id);
+  });
+});

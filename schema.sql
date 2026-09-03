@@ -90,7 +90,17 @@ CREATE TABLE IF NOT EXISTS decisions (
   -- สิ่งที่ agent รายงานเกี่ยวกับการกระทำของตัวเองเชื่อไม่ได้
   decided_by_kind TEXT,
   decided_reason  TEXT,
-  decided_at      TEXT
+  decided_at      TEXT,
+
+  -- ตัวที่ใช้อยู่แทนอันนี้ ใส่ตอนปฏิเสธเพราะซ้ำ
+  --
+  -- ทิศกลับกับ `plans.supersedes` โดยตั้งใจ — ที่นั่นตัวใหม่ชี้ไปหาตัวเก่าที่มันมาแทน
+  -- ส่วนที่นี่ตัวที่ตกไปชี้ไปหาตัวที่ยังยืนอยู่ เพราะคนอ่านมาเจอตัวที่ตกไปก่อน
+  -- แล้วต้องหาให้เจอว่าไปดูอันไหนแทน
+  --
+  -- ห้ามชี้ไปหาตัวที่ถูกปฏิเสธไปแล้ว ไม่งั้นเกิดวงกลมที่ตามยังไงก็ไม่เจอตัวจริง —
+  -- เจอมาแล้วตอน Mistral ปฏิเสธสามอันแล้วให้ทั้งสามอ้างถึงกันเองวนไปวนมา
+  superseded_by   TEXT REFERENCES decisions(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_workspace

@@ -104,6 +104,16 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           .string()
           .min(1)
           .describe("Why. Someone reading this next month needs it to make sense."),
+        superseded_by: z
+          .string()
+          .optional()
+          .describe(
+            "When rejecting something as a duplicate, the id of the decision that " +
+              "stands in its place. Point at the one still in force — pointing at " +
+              "another rejected decision is refused, because a reader following the " +
+              "trail would never reach the real answer. Leave empty when rejecting " +
+              "on merit with nothing replacing it.",
+          ),
         approval_code: z
           .string()
           .optional()
@@ -114,7 +124,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           ),
       }),
     },
-    async ({ decision_id, verdict, reason, approval_code }) =>
+    async ({ decision_id, verdict, reason, superseded_by, approval_code }) =>
       run(async () => {
         const { decision, announced } = await resolveDecision(
           env.DB,
@@ -123,12 +133,14 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           reason,
           author(),
           { code: approval_code, secret: env.APPROVAL_SECRET },
+          superseded_by,
         );
         return {
           decision_id: decision.id,
           status: decision.status,
           decided_by: decision.decided_by,
           decided_by_kind: decision.decided_by_kind,
+          superseded_by: decision.superseded_by,
           announced_in_discussion: announced,
           note:
             decision.decided_by_kind === "human"

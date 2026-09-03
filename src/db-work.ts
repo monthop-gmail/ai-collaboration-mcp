@@ -29,6 +29,7 @@ export interface Decision {
   decided_by_kind: DecidedByKind | null;
   decided_reason: string | null;
   decided_at: string | null;
+  superseded_by: string | null;
 }
 
 /**
@@ -136,6 +137,7 @@ export async function recordDecision(
     decided_by_kind: null,
     decided_reason: null,
     decided_at: null,
+    superseded_by: null,
   };
 
   await db
@@ -619,6 +621,7 @@ export async function resolveDecision(
   reason: string,
   author: Author,
   approval: { code?: string; secret?: string } = {},
+  supersededBy?: string,
 ): Promise<{ decision: Decision; announced: boolean }> {
   const existing = await db
     .prepare("SELECT * FROM decisions WHERE id = ?1")
@@ -631,6 +634,31 @@ export async function resolveDecision(
       `decision นี้ถูกปิดไปแล้วเป็น '${existing.status}' โดย ${existing.decided_by} ` +
         `เมื่อ ${existing.decided_at}`,
     );
+  }
+
+  if (supersededBy !== undefined) {
+    if (supersededBy === decisionId) {
+      throw new RequestError("superseded_by ชี้กลับมาที่ตัวเอง");
+    }
+
+    const replacement = await db
+      .prepare("SELECT id, status, workspace_id FROM decisions WHERE id = ?1")
+      .bind(supersededBy)
+      .first<{ id: string; status: DecisionStatus; workspace_id: string }>();
+
+    if (!replacement) throw new RequestError(`ไม่พบ decision '${supersededBy}'`);
+
+    if (replacement.workspace_id !== existing.workspace_id) {
+      throw new RequestError("superseded_by ต้องอยู่ใน workspace เดียวกัน");
+    }
+
+    // กันวงกลม ถ้าชี้ไปหาตัวที่ตกไปแล้ว คนอ่านจะตามไปเจอทางตัน
+    if (replacement.status === "rejected") {
+      throw new RequestError(
+        `decision '${supersededBy}' ถูกปฏิเสธไปแล้ว ชี้ไปหามันไม่ได้ — ` +
+          "superseded_by ต้องเป็นตัวที่ยังใช้อยู่ ไม่งั้นคนอ่านตามไปแล้วหาตัวจริงไม่เจอ",
+      );
+    }
   }
 
   let kind: DecidedByKind = "relayed";
@@ -651,10 +679,14 @@ export async function resolveDecision(
     .prepare(
       `UPDATE decisions
           SET status = ?1, decided_by = ?2, decided_by_client = ?3,
-              decided_by_kind = ?4, decided_reason = ?5, decided_at = ?6
-        WHERE id = ?7`,
+              decided_by_kind = ?4, decided_reason = ?5, decided_at = ?6,
+              superseded_by = ?7
+        WHERE id = ?8`,
     )
-    .bind(verdict, author.name, author.client, kind, reason, decidedAt, decisionId)
+    .bind(
+      verdict, author.name, author.client, kind, reason, decidedAt,
+      supersededBy ?? null, decisionId,
+    )
     .run();
 
   // ประกาศกลับเข้ากระทู้ต้นทาง เพื่อให้ทุกคนที่อยู่ในโต๊ะเห็นว่าเรื่องนี้ปิดแล้ว
@@ -664,11 +696,13 @@ export async function resolveDecision(
     const label = verdict === "approved" ? "อนุมัติ" : "ปฏิเสธ";
     const evidence =
       kind === "human" ? "ยืนยันด้วยรหัสแล้ว" : "ตามที่ผู้ใช้สั่งผ่านไคลเอนต์ ยังไม่ได้ยืนยัน";
+    // ชี้ทางให้คนอ่านไปต่อได้ ไม่ใช่บอกแค่ว่าอันนี้ตกไป
+    const pointer = supersededBy ? `\n\nใช้ ${supersededBy} แทน` : "";
     await postMessage(
       db,
       existing.discussion_id,
       "note",
-      `[${label} decision] ${existing.title}\n\nเหตุผล: ${reason}\n\n` +
+      `[${label} decision] ${existing.title}\n\nเหตุผล: ${reason}${pointer}\n\n` +
         `ปิดโดย ${author.name} (${evidence}) — ${decisionId}`,
       author,
     );
@@ -684,6 +718,7 @@ export async function resolveDecision(
       decided_by_kind: kind,
       decided_reason: reason,
       decided_at: decidedAt,
+      superseded_by: supersededBy ?? null,
     },
     announced,
   };
