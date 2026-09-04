@@ -723,3 +723,113 @@ export async function resolveDecision(
     announced,
   };
 }
+
+/* ── ภาพรวมของที่ยังค้าง ─────────────────────────────────────────────── */
+
+export interface OpenItems {
+  decisions_awaiting: number;
+  plans_current: number;
+  latest_plan: { id: string; title: string } | null;
+  /** นับเฉพาะที่ยังไม่ done แยกตามสถานะ */
+  tasks: Record<string, number>;
+  handoffs_pending: number;
+  waiting_for_you: {
+    handoffs: Array<{ id: string; task_id: string; from: string; created_at: string }>;
+    tasks: Array<{ id: string; title: string; status: string }>;
+    total: number;
+  };
+}
+
+/** จำกัดรายการที่ยกมาแสดง ที่เหลือดูได้จาก get_tasks / get_handoffs */
+const WAITING_PREVIEW = 10;
+
+/**
+ * สรุปของที่ยังค้างใน workspace รวมของที่รอผู้เรียกอยู่โดยเฉพาะ
+ *
+ * มีเพราะ `get_workspace_context` เดิมคืนแค่รายชื่อกระทู้ ทั้งที่ tool description
+ * บอกให้เรียกอันนี้ก่อนเมื่อเข้ามาใหม่ ผลคือทีมที่เข้ามาไม่เห็น task, handoff,
+ * decision หรือ plan เลย และงานหายเงียบไปแล้วสองใบ — handoff ที่ค้างห้าวันโดยไม่มี
+ * ใครรับ กับ task ที่ถูกสร้างแบบไม่มีเจ้าของและไม่ผูกกระทู้
+ *
+ * `waiting_for_you` จับคู่จากชื่อผู้เรียกซึ่งมาจาก connection ไม่ใช่จาก argument
+ * ทีมที่ยังไม่ตั้ง `X-Client-Name` จะใช้ชื่อร่วมกันจึงเห็นงานปนกัน — เป็นเหตุผล
+ * อีกข้อที่ทุกทีมควรตั้งชื่อของตัวเอง
+ */
+export async function readOpenItems(
+  db: D1Database,
+  workspaceId: string,
+  myName: string,
+): Promise<OpenItems> {
+  const [counts, taskCounts, plan, myHandoffs, myTasks] = await db.batch([
+    db
+      .prepare(
+        `SELECT 'decisions' AS k, COUNT(*) AS n
+           FROM decisions WHERE workspace_id = ?1 AND status = 'proposed'
+         UNION ALL
+         SELECT 'handoffs', COUNT(*)
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending'
+         UNION ALL
+         SELECT 'plans', COUNT(*)
+           FROM plans
+          WHERE workspace_id = ?1
+            AND id NOT IN (SELECT supersedes FROM plans WHERE supersedes IS NOT NULL)`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT status, COUNT(*) AS n FROM tasks
+          WHERE workspace_id = ?1 AND status != 'done' GROUP BY status`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT id, title FROM plans
+          WHERE workspace_id = ?1
+            AND id NOT IN (SELECT supersedes FROM plans WHERE supersedes IS NOT NULL)
+          ORDER BY created_at DESC LIMIT 1`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT h.id, h.task_id, h.from_name AS "from", h.created_at
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND h.to_whom = ?2
+          ORDER BY h.created_at`,
+      )
+      .bind(workspaceId, myName),
+    db
+      .prepare(
+        `SELECT id, title, status FROM tasks
+          WHERE workspace_id = ?1 AND assigned_to = ?2 AND status != 'done'
+          ORDER BY created_at`,
+      )
+      .bind(workspaceId, myName),
+  ]);
+
+  const byKey = new Map(
+    (counts.results as Array<{ k: string; n: number }>).map((r) => [r.k, r.n]),
+  );
+
+  const tasks: Record<string, number> = {};
+  for (const row of taskCounts.results as Array<{ status: string; n: number }>) {
+    tasks[row.status] = row.n;
+  }
+
+  const handoffRows = myHandoffs.results as OpenItems["waiting_for_you"]["handoffs"];
+  const taskRows = myTasks.results as OpenItems["waiting_for_you"]["tasks"];
+  const planRow = (plan.results as Array<{ id: string; title: string }>)[0] ?? null;
+
+  return {
+    decisions_awaiting: byKey.get("decisions") ?? 0,
+    plans_current: byKey.get("plans") ?? 0,
+    latest_plan: planRow,
+    tasks,
+    handoffs_pending: byKey.get("handoffs") ?? 0,
+    waiting_for_you: {
+      handoffs: handoffRows.slice(0, WAITING_PREVIEW),
+      tasks: taskRows.slice(0, WAITING_PREVIEW),
+      total: handoffRows.length + taskRows.length,
+    },
+  };
+}

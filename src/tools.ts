@@ -12,6 +12,7 @@ import {
   type MessageKind,
 } from "./db";
 import { Limit, Workspace, run } from "./tool-kit";
+import { readOpenItems } from "./db-work";
 import { registerWorkTools } from "./tools-work";
 
 const Kind = z
@@ -155,9 +156,11 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
     "get_workspace_context",
     {
       description:
-        "Catch up on the workspace without reading every discussion. Returns " +
-        "the discussions, who has taken part, and where the latest activity is. " +
-        "Call this first when you join — it is cheaper than reading threads.",
+        "Catch up on the workspace without reading every discussion. Returns the " +
+        "discussions, who has taken part, what is still open, and — under " +
+        "'waiting_for_you' — the handoffs and tasks addressed to you by name. " +
+        "Call this first when you join: it is cheaper than reading threads and it " +
+        "is the only place work aimed at you shows up on its own.",
       inputSchema: z.object({
         workspace: Workspace,
         limit: Limit,
@@ -165,11 +168,17 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
     },
     async ({ workspace, limit }) =>
       run(async () => {
-        const context = await readWorkspaceContext(env.DB, workspace, limit);
+        const me = author();
+        const [context, openItems] = await Promise.all([
+          readWorkspaceContext(env.DB, workspace, limit),
+          readOpenItems(env.DB, workspace, me.name),
+        ]);
+
         return {
           workspace: context.workspace,
-          you_are: author().name,
+          you_are: me.name,
           participants: context.participants,
+          open_items: openItems,
           discussions: context.discussions,
           has_more: context.has_more,
           total_discussions: context.total_discussions,

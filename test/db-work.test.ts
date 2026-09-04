@@ -9,6 +9,7 @@ import {
   getTask,
   readDecisions,
   readHandoffs,
+  readOpenItems,
   readTasks,
   readPlans,
   recordDecision,
@@ -460,5 +461,97 @@ describe("ชี้ทางว่าตัวที่ตกไปถูกแ�
 
     const page = await readMessages(env.DB, dis.id, 0, 50);
     expect(page.messages.at(-1)!.body).toContain(keep.id);
+  });
+});
+
+describe("ภาพรวมของที่ยังค้าง", () => {
+  it("workspace ว่างเปล่าคืนศูนย์ ไม่ใช่พัง", async () => {
+    const items = await readOpenItems(env.DB, WS, "Claude");
+
+    expect(items.decisions_awaiting).toBe(0);
+    expect(items.plans_current).toBe(0);
+    expect(items.latest_plan).toBeNull();
+    expect(items.tasks).toEqual({});
+    expect(items.handoffs_pending).toBe(0);
+    expect(items.waiting_for_you.total).toBe(0);
+  });
+
+  it("นับ decision ที่ยังรอตัดสิน ไม่นับที่ปิดแล้ว", async () => {
+    const dis = await createDiscussion(env.DB, WS, "หัวข้อ", chatgpt);
+    await recordDecision(env.DB, WS, "ก", "x", chatgpt, dis.id);
+    const closed = await recordDecision(env.DB, WS, "ข", "x", chatgpt, dis.id);
+    await resolveDecision(env.DB, closed.id, "approved", "เอาอันนี้", claude);
+
+    const items = await readOpenItems(env.DB, WS, "Claude");
+    expect(items.decisions_awaiting).toBe(1);
+  });
+
+  it("นับ task แยกตามสถานะ และไม่นับที่ done แล้ว", async () => {
+    const a = await createTask(env.DB, WS, "ก", "", chatgpt);
+    const b = await createTask(env.DB, WS, "ข", "", chatgpt);
+    await createTask(env.DB, WS, "ค", "", chatgpt);
+    await updateTask(env.DB, a.id, claude, { status: "in_progress" });
+    await updateTask(env.DB, b.id, claude, { status: "done" });
+
+    const items = await readOpenItems(env.DB, WS, "Claude");
+    expect(items.tasks).toEqual({ open: 1, in_progress: 1 });
+  });
+
+  it("แผนที่ถูกเขียนทับแล้วไม่นับ", async () => {
+    const first = await recordPlan(env.DB, WS, "แผนแรก", "x", chatgpt);
+    await recordPlan(env.DB, WS, "แผนใหม่", "y", gemini, { supersedes: first.id });
+
+    const items = await readOpenItems(env.DB, WS, "Claude");
+    expect(items.plans_current).toBe(1);
+    expect(items.latest_plan?.title).toBe("แผนใหม่");
+  });
+
+  /**
+   * เหตุผลทั้งหมดที่เพิ่มส่วนนี้ — handoff ค้างห้าวันโดยไม่มีใครรับ เพราะไม่มีที่ไหน
+   * บอกว่ามีงานรออยู่ ปลายทางต้องเห็นตั้งแต่เรียก context ครั้งแรก
+   */
+  it("ยกงานที่ส่งถึงชื่อของผู้เรียกมาให้เห็น", async () => {
+    const t = await createTask(env.DB, WS, "งานของ Gemini", "", chatgpt);
+    await createHandoff(env.DB, t.id, "Gemini", "ช่วยต่อให้ที", chatgpt);
+
+    const mine = await readOpenItems(env.DB, WS, "Gemini");
+    expect(mine.waiting_for_you.handoffs).toHaveLength(1);
+    expect(mine.waiting_for_you.handoffs[0]!.from).toBe("ChatGPT");
+    // handoff ตั้ง assigned_to ให้ด้วย จึงนับทั้งสองทาง
+    expect(mine.waiting_for_you.tasks.map((x) => x.title)).toEqual(["งานของ Gemini"]);
+    expect(mine.waiting_for_you.total).toBe(2);
+  });
+
+  it("คนอื่นไม่เห็นงานที่ไม่ได้ส่งถึงตัวเอง", async () => {
+    const t = await createTask(env.DB, WS, "งานของ Gemini", "", chatgpt);
+    await createHandoff(env.DB, t.id, "Gemini", "ช่วยต่อ", chatgpt);
+
+    const other = await readOpenItems(env.DB, WS, "Claude");
+    expect(other.waiting_for_you.total).toBe(0);
+    // แต่ยังเห็นว่ามีของค้างในภาพรวม
+    expect(other.handoffs_pending).toBe(1);
+  });
+
+  it("handoff ที่ถูกรับไปแล้วไม่ค้างอยู่ในรายการอีก", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt);
+    const { handoff } = await createHandoff(env.DB, t.id, "Gemini", "ช่วยต่อ", chatgpt);
+    await acceptHandoff(env.DB, handoff.id, gemini);
+
+    const items = await readOpenItems(env.DB, WS, "Gemini");
+    expect(items.handoffs_pending).toBe(0);
+    expect(items.waiting_for_you.handoffs).toEqual([]);
+    // แต่ task ยังเป็นของมันอยู่ ต้องยังเห็น
+    expect(items.waiting_for_you.tasks).toHaveLength(1);
+  });
+
+  it("นับเฉพาะของใน workspace ที่ถาม", async () => {
+    await env.DB.prepare(
+      "INSERT INTO workspaces (id, name, created_at) VALUES ('ws-002','อีกอัน','2026-01-01T00:00:00.000Z')",
+    ).run();
+    await createTask(env.DB, "ws-002", "งานที่อื่น", "", chatgpt, undefined, "Gemini");
+
+    const items = await readOpenItems(env.DB, WS, "Gemini");
+    expect(items.tasks).toEqual({});
+    expect(items.waiting_for_you.total).toBe(0);
   });
 });
