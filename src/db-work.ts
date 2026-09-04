@@ -751,6 +751,11 @@ const WAITING_PREVIEW = 10;
  * decision หรือ plan เลย และงานหายเงียบไปแล้วสองใบ — handoff ที่ค้างห้าวันโดยไม่มี
  * ใครรับ กับ task ที่ถูกสร้างแบบไม่มีเจ้าของและไม่ผูกกระทู้
  *
+ * จับคู่ชื่อแบบไม่สนตัวพิมพ์ใหญ่เล็ก เพราะ GitHub ไม่แคร์ตัวพิมพ์ แต่ team_id ที่
+ * ทีมคัดมาจาก URL อาจมีตัวใหญ่ปนขณะที่ผู้ส่งงานพิมพ์ตัวเล็ก ถ้าเทียบตรงตัวสองฝั่ง
+ * จะไม่มีวันเจอกันโดยไม่มีใคร error — `lower()` ของ SQLite ครอบเฉพาะ ASCII ซึ่งพอ
+ * เพราะ owner กับ repository ของ GitHub เป็น ASCII อยู่แล้ว
+ *
  * `waiting_for_you` จับคู่จากชื่อผู้เรียกซึ่งมาจาก connection ไม่ใช่จาก argument
  * ทีมที่ยังไม่ตั้ง `X-Client-Name` จะใช้ชื่อร่วมกันจึงเห็นงานปนกัน — เป็นเหตุผล
  * อีกข้อที่ทุกทีมควรตั้งชื่อของตัวเอง
@@ -794,14 +799,16 @@ export async function readOpenItems(
       .prepare(
         `SELECT h.id, h.task_id, h.from_name AS "from", h.created_at
            FROM handoffs h JOIN tasks t ON t.id = h.task_id
-          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND h.to_whom = ?2
+          WHERE t.workspace_id = ?1 AND h.status = 'pending'
+            AND lower(h.to_whom) = lower(?2)
           ORDER BY h.created_at`,
       )
       .bind(workspaceId, myName),
     db
       .prepare(
         `SELECT id, title, status FROM tasks
-          WHERE workspace_id = ?1 AND assigned_to = ?2 AND status != 'done'
+          WHERE workspace_id = ?1 AND lower(assigned_to) = lower(?2)
+            AND status != 'done'
           ORDER BY created_at`,
       )
       .bind(workspaceId, myName),

@@ -71,7 +71,16 @@ const mcpApiHandler = {
     // คำนวณชื่อสำรองให้ทุกคำขอ ไม่ต้องแยกว่ามาทางไหน เพราะ `resolveAuthor` ให้
     // ตัวตนจาก OAuth ชนะเสมอเมื่อมี — ชื่อจาก header จึงมีผลเฉพาะเส้น static bearer
     const identity = staticIdentityFor(request, env.STATIC_CLIENT_NAME);
-    return getHandler(env, identity)(request, env, ctx);
+
+    // ชื่อผิดรูปแบบต้องรู้ทันทีตั้งแต่ต่อไม่ติด ดีกว่าโพสต์ไปเรื่อย ๆ ในชื่อที่
+    // ไม่ตรงกับที่ผู้ส่งงานระบุไว้แล้วสงสัยทีหลังว่าทำไมไม่มีงานเข้า
+    if (!identity.ok) {
+      return Promise.resolve(
+        json({ error: "invalid_client_name", detail: identity.reason }, 400),
+      );
+    }
+
+    return getHandler(env, identity.identity)(request, env, ctx);
   },
 };
 

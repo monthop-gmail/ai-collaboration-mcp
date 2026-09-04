@@ -108,8 +108,18 @@ export function resolveAuthor(
   };
 }
 
-/** ความยาวสูงสุดของชื่อที่รับจาก header กันไม่ให้ยัดข้อความยาว ๆ เข้ามาเป็นชื่อ */
-const MAX_HEADER_NAME = 64;
+/**
+ * ความยาวสูงสุดของชื่อที่รับจาก header
+ *
+ * 140 มาจากขอบเขตของ GitHub — owner ยาวได้ 39 และ repository ยาวได้ 100 บวก
+ * เครื่องหมายทับอีกหนึ่ง ตาม convention ที่ตกลงกันว่า team_id คือ owner/repository
+ */
+const MAX_HEADER_NAME = 140;
+
+/** ผลการอ่านชื่อ แยกกรณีที่ผิดรูปแบบออกจากกรณีที่ไม่ได้ส่งมา */
+export type ClientNameResult =
+  | { ok: true; identity: StaticIdentity | undefined }
+  | { ok: false; reason: string };
 
 /**
  * อ่านชื่อที่ client ส่งมาเองทาง `X-Client-Name`
@@ -120,24 +130,39 @@ const MAX_HEADER_NAME = 64;
  * ตัดอักขระควบคุมออกเพราะขึ้นบรรทัดใหม่ในชื่อทำให้ตารางที่คนอ่านเพี้ยน และจำกัดความยาว
  * ไว้ ค่านี้ไม่ได้พิสูจน์อะไรทั้งสิ้น — เป็นแค่ป้ายชื่อที่ผู้ถือ token เลือกเอง
  */
-export function readClientNameHeader(request: Request): StaticIdentity | undefined {
+export function readClientNameHeader(request: Request): ClientNameResult {
   const raw = request.headers.get("x-client-name");
-  if (raw === null) return undefined;
+  if (raw === null) return { ok: true, identity: undefined };
 
   const cleaned = raw.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
-  if (cleaned === "") return undefined;
+  if (cleaned === "") return { ok: true, identity: undefined };
 
-  return { name: cleaned.slice(0, MAX_HEADER_NAME), source: "header" };
+  // ไม่ตัดให้เงียบ ๆ — ชื่อที่ถูกตัดจะไม่ตรงกับที่ผู้ส่งงานพิมพ์ไว้ใน to_whom
+  // แล้วงานจะส่งไม่ถึงโดยไม่มีใคร error ซึ่งเป็นอาการที่ทั้งโปรเจกต์ไล่แก้มาตลอด
+  if ([...cleaned].length > MAX_HEADER_NAME) {
+    return {
+      ok: false,
+      reason:
+        `X-Client-Name ยาว ${[...cleaned].length} ตัว เกินเพดาน ${MAX_HEADER_NAME} ` +
+        "ตัว — ตั้งชื่อให้สั้นลง ระบบไม่ตัดให้เพราะชื่อที่ถูกตัดจะไม่ตรงกับปลายทางที่ผู้ส่งงานระบุไว้",
+    };
+  }
+
+  return { ok: true, identity: { name: cleaned, source: "header" } };
 }
 
 /** ชื่อที่จะใช้เมื่อไม่ได้มาทาง OAuth — header ที่ client ส่งมา หรือค่าที่ผู้ดูแลตั้งไว้ */
 export function staticIdentityFor(
   request: Request,
   configuredName: string | undefined,
-): StaticIdentity | undefined {
+): ClientNameResult {
   const fromHeader = readClientNameHeader(request);
-  if (fromHeader) return fromHeader;
+  if (!fromHeader.ok) return fromHeader;
+  if (fromHeader.identity) return fromHeader;
 
   const configured = configuredName?.trim();
-  return configured ? { name: configured, source: "config" } : undefined;
+  return {
+    ok: true,
+    identity: configured ? { name: configured, source: "config" } : undefined,
+  };
 }

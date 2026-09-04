@@ -522,6 +522,19 @@ describe("ภาพรวมของที่ยังค้าง", () => {
     expect(mine.waiting_for_you.total).toBe(2);
   });
 
+  /**
+   * GitHub ไม่แคร์ตัวพิมพ์ แต่ team_id ที่ทีมคัดมาจาก URL อาจมีตัวใหญ่ปน ขณะที่
+   * ผู้ส่งงานพิมพ์ตัวเล็ก ถ้าเทียบตรงตัวสองฝั่งจะไม่มีวันเจอกันโดยไม่มีใคร error
+   */
+  it("จับคู่ชื่อไม่สนตัวพิมพ์ใหญ่เล็ก", async () => {
+    const t = await createTask(env.DB, WS, "งานของทีม", "", chatgpt);
+    await createHandoff(env.DB, t.id, "monthop-gmail/agent-builder-pi-poc", "ช่วยต่อ", chatgpt);
+
+    const mixed = await readOpenItems(env.DB, WS, "Monthop-Gmail/Agent-Builder-PI-POC");
+    expect(mixed.waiting_for_you.handoffs).toHaveLength(1);
+    expect(mixed.waiting_for_you.tasks).toHaveLength(1);
+  });
+
   it("คนอื่นไม่เห็นงานที่ไม่ได้ส่งถึงตัวเอง", async () => {
     const t = await createTask(env.DB, WS, "งานของ Gemini", "", chatgpt);
     await createHandoff(env.DB, t.id, "Gemini", "ช่วยต่อ", chatgpt);

@@ -139,9 +139,15 @@ function requestWith(headers: Record<string, string>): Request {
   return new Request("https://example.com/mcp", { headers });
 }
 
+/** คลี่ผลลัพธ์ในเทสที่รู้ว่าต้องสำเร็จ ให้ assertion อ่านง่าย */
+function nameOf(result: { ok: boolean } & Record<string, unknown>) {
+  if (!result.ok) throw new Error("คาดว่าจะสำเร็จ แต่ได้: " + JSON.stringify(result));
+  return (result as { identity?: { name: string } }).identity;
+}
+
 describe("อ่านชื่อจาก X-Client-Name", () => {
   it("อ่านชื่อธรรมดาได้", () => {
-    expect(readClientNameHeader(requestWith({ "x-client-name": "Manus" }))).toEqual(
+    expect(nameOf(readClientNameHeader(requestWith({ "x-client-name": "Manus" })))).toEqual(
       header("Manus"),
     );
   });
@@ -151,7 +157,30 @@ describe("อ่านชื่อจาก X-Client-Name", () => {
     ["ค่าว่าง", { "x-client-name": "" }],
     ["มีแต่ช่องว่าง", { "x-client-name": "   " }],
   ])("%s → ไม่ได้ชื่อ", (_label, headers) => {
-    expect(readClientNameHeader(requestWith(headers))).toBeUndefined();
+    expect(nameOf(readClientNameHeader(requestWith(headers)))).toBeUndefined();
+  });
+
+  it("team_id ที่มีเครื่องหมายทับใช้ได้", () => {
+    const id = "monthop-gmail/agent-builder-pi-poc";
+    expect(nameOf(readClientNameHeader(requestWith({ "x-client-name": id })))?.name).toBe(id);
+  });
+
+  it("ยาว 140 ตัวพอดียังผ่าน", () => {
+    const id = "a".repeat(39) + "/" + "b".repeat(100);
+    expect(nameOf(readClientNameHeader(requestWith({ "x-client-name": id })))?.name).toBe(id);
+  });
+
+  /**
+   * ห้ามตัดเงียบ — ชื่อที่ถูกตัดจะไม่ตรงกับที่ผู้ส่งงานพิมพ์ไว้ใน to_whom แล้วงาน
+   * จะส่งไม่ถึงโดยไม่มีใคร error ตกลงกับ ChatGPT ไว้ในกระทู้ dis-28697bf3 ว่าให้
+   * คืน error ที่ผู้เรียกเห็นชัดแทน
+   */
+  it("ยาวเกิน 140 ต้องได้ error ไม่ใช่ชื่อที่ถูกตัด", () => {
+    const result = readClientNameHeader(
+      requestWith({ "x-client-name": "a".repeat(141) }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.reason).toMatch(/141/);
   });
 
   /**
@@ -160,28 +189,33 @@ describe("อ่านชื่อจาก X-Client-Name", () => {
    * มองไม่เห็นอย่าง zero-width space ซึ่งใช้ทำให้ชื่อดูเหมือนคนอื่นได้ทั้งที่คนละค่า
    */
   it("ตัดอักขระที่มองไม่เห็นออก กันชื่อที่ดูเหมือนกันแต่คนละค่า", () => {
-    const got = readClientNameHeader(requestWith({ "x-client-name": "Ma\u200Bnus" }));
+    const got = nameOf(readClientNameHeader(requestWith({ "x-client-name": "Ma\u200Bnus" })));
     expect(got?.name).toBe("Manus");
-  });
-
-  it("ตัดชื่อที่ยาวเกินให้เหลือ 64 ตัว", () => {
-    const long = "ก".repeat(200);
-    expect(readClientNameHeader(requestWith({ "x-client-name": long }))?.name).toHaveLength(64);
   });
 });
 
 describe("ลำดับความสำคัญของชื่อสำรอง", () => {
   it("header ชนะค่าที่ผู้ดูแลตั้งไว้", () => {
     const got = staticIdentityFor(requestWith({ "x-client-name": "Manus" }), "Claude Code");
-    expect(got).toEqual(header("Manus"));
+    expect(nameOf(got)).toEqual(header("Manus"));
   });
 
   it("ไม่มี header ก็ใช้ค่าที่ผู้ดูแลตั้ง", () => {
-    expect(staticIdentityFor(requestWith({}), "Claude Code")).toEqual(config("Claude Code"));
+    expect(nameOf(staticIdentityFor(requestWith({}), "Claude Code"))).toEqual(
+      config("Claude Code"),
+    );
   });
 
   it("ไม่มีทั้งคู่ ก็ไม่มีชื่อ", () => {
-    expect(staticIdentityFor(requestWith({}), undefined)).toBeUndefined();
+    expect(nameOf(staticIdentityFor(requestWith({}), undefined))).toBeUndefined();
+  });
+
+  it("ชื่อยาวเกินส่งต่อ error ออกมา ไม่ถอยไปใช้ค่าสำรอง", () => {
+    const got = staticIdentityFor(
+      requestWith({ "x-client-name": "a".repeat(200) }),
+      "Claude Code",
+    );
+    expect(got.ok).toBe(false);
   });
 
   /**
