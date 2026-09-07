@@ -11,7 +11,7 @@ import {
   readWorkspaceContext,
   type MessageKind,
 } from "./db";
-import { Limit, Workspace, run } from "./tool-kit";
+import { CONTRACT_VERSION, Limit, Workspace, registerTool, run } from "./tool-kit";
 import { readOpenItems } from "./db-work";
 import { registerWorkTools } from "./tools-work";
 
@@ -28,7 +28,8 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
 
   registerWorkTools(server, env, staticIdentity);
 
-  server.registerTool(
+  registerTool(
+    server,
     "create_discussion",
     {
       description:
@@ -64,7 +65,8 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "post_message",
     {
       description:
@@ -102,7 +104,8 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "get_discussion",
     {
       description:
@@ -152,7 +155,8 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "get_workspace_context",
     {
       description:
@@ -177,6 +181,9 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         ]);
 
         return {
+          // เลขเดียวกับที่อยู่บรรทัดแรกของ description ทุก tool — ไม่ตรงกันเมื่อไหร่
+          // แปลว่าผู้เรียกถือ schema เก่าอยู่ ต้อง reconnect ดู ADR-0028
+          contract: CONTRACT_VERSION,
           workspace: context.workspace,
           you_are: me.name,
           participants: context.participants,

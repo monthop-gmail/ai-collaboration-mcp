@@ -22,7 +22,7 @@ import {
   type DecisionStatus,
   type TaskStatus,
 } from "./db-work";
-import { Limit, Workspace, handoffReminder, run } from "./tool-kit";
+import { Limit, Workspace, handoffReminder, registerTool, run } from "./tool-kit";
 
 const Detail = z.string().describe("Full reasoning or context. Be specific — this is what a participant who was not present will read.");
 
@@ -30,7 +30,8 @@ const Detail = z.string().describe("Full reasoning or context. Be specific — t
 export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
   const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
 
-  server.registerTool(
+  registerTool(
+    server,
     "record_decision",
     {
       description:
@@ -66,7 +67,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "get_decisions",
     {
       description:
@@ -90,7 +92,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "resolve_decision",
     {
       description:
@@ -153,7 +156,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "record_plan",
     {
       description:
@@ -191,7 +195,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "get_plans",
     {
       description:
@@ -218,7 +223,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "create_task",
     {
       description:
@@ -265,7 +271,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "update_task",
     {
       description:
@@ -308,7 +315,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "get_tasks",
     {
       description:
@@ -333,7 +341,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "create_handoff",
     {
       description:
@@ -372,7 +381,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "get_handoffs",
     {
       description:
@@ -421,7 +431,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    server,
     "accept_handoff",
     {
       description:

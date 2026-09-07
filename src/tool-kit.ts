@@ -6,9 +6,60 @@
  * ความล้มเหลว
  */
 
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { DEFAULT_WORKSPACE } from "./env";
 import { RequestError } from "./db";
+
+/**
+ * เลข contract ของรูปผลลัพธ์ที่ tool คืน — จำนวนเต็ม ไม่ใช่ semver
+ *
+ * ตามกติกาที่ agent-platform ร่างไว้ใน ADR-0028 หลังเราชนปัญหาว่า server ตัวนี้เป็น
+ * stateless จึงส่ง `notifications/tools/list_changed` ไม่ได้ ทางที่เหลือคือห้ามลบคีย์
+ * ภายใน contract เดียวกัน แล้วให้เลขนี้เป็นเครื่องมือวินิจฉัย ไม่ใช่กลไกกันพัง
+ *
+ * ปรากฏสองที่ที่ถูก cache คนละแบบ — บรรทัดแรกของ description ทุก tool ซึ่งค้างอยู่ที่
+ * client จนกว่ามันจะเชื่อมต่อใหม่ กับผลลัพธ์ของ `get_workspace_context` ซึ่งสร้างสด
+ * ทุกครั้ง เลขสองที่ไม่ตรงกันเมื่อไหร่ แปลว่าผู้เรียกถือ schema เก่าอยู่และต้อง
+ * reconnect ตรวจได้โดยไม่ต้องเชื่อคำกล่าวอ้างของใคร
+ *
+ * 1 คือรูปก่อน 7 ก.ย. 2026 ที่ `waiting_for_you` มีคีย์ `handoffs` กับ `tasks`
+ * 2 คือรูปปัจจุบันที่แยกเป็น `unaccepted` กับ `in_progress`
+ *
+ * ขยับเมื่อลบหรือเปลี่ยนความหมายของคีย์เดิมเท่านั้น การเพิ่มคีย์ใหม่ไม่ต้องขยับ
+ */
+export const CONTRACT_VERSION = 2;
+
+/**
+ * ลงทะเบียน tool พร้อมประกาศเลข contract ไว้บรรทัดแรกของ description
+ *
+ * ทำเป็น wrapper แทนการเขียนเลขไว้ในข้อความของแต่ละ tool เพราะ tool ตัวที่สิบหกที่
+ * ใครจะเพิ่มทีหลังต้องได้เลขนี้โดยไม่ต้องจำ — กติกาที่ต้องอาศัยความจำคือกติกาที่จะถูก
+ * ละเมิดโดยไม่มีใครรู้ตัว ซึ่งเป็นบทเรียนของสัปดาห์นี้ทั้งสัปดาห์
+ *
+ * ตำแหน่งตายตัวสำคัญกว่าถ้อยคำ — ผู้อ่านคือโมเดล การให้เทียบเลขสองตัวในตำแหน่งที่รู้
+ * ล่วงหน้าแม่นกว่าการให้เทียบข้อความอิสระ
+ */
+export function registerTool<Schema extends z.ZodType>(
+  server: McpServer,
+  name: string,
+  config: { description: string; inputSchema: Schema },
+  handler: (args: z.infer<Schema>) => Promise<unknown>,
+): void {
+  const described = {
+    ...config,
+    description: `contract ${CONTRACT_VERSION}\n\n${config.description}`,
+  };
+
+  // cast จุดเดียวตรงนี้ เพราะ signature จริงของ registerTool เป็น generic ที่ infer
+  // จาก schema — ห่อแล้ว TypeScript ตามต่อไม่ได้ ส่วน type ที่ผู้เรียกเห็นยังครบ
+  // เพราะ `handler` ผูกกับ `Schema` ตัวเดียวกับ `inputSchema` ข้างบน
+  (server.registerTool as (n: string, c: typeof described, h: typeof handler) => void)(
+    name,
+    described,
+    handler,
+  );
+}
 
 /**
  * เพดานเริ่มต้นตอนอ่าน
