@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "collab": {
+      "type": "streamable-http",
+      "url": "${COLLAB_MCP_URL:-https://ai-collaboration-mcp.monthop-gmail.workers.dev/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "X-Client-Name": "monthop-gmail/ai-collaboration-mcp"
+      }
+    }
+  }
+}
