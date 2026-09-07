@@ -55,6 +55,27 @@ export interface Task {
   updated_at: string | null;
 }
 
+/**
+ * task พร้อมคำตอบว่ามี handoff รอคนรับอยู่หรือไม่
+ *
+ * `handoff` เป็น null เมื่อไม่มี ไม่ใช่หายไปจากผลลัพธ์ — ผู้เรียกที่จะเล่าว่าส่งงานให้
+ * ทีมใดแล้วต้องมองผ่านค่า null ให้ได้ก่อน ซึ่งยากกว่าการลืมเรียก tool ที่สอง
+ * ข้อเสนอนี้มาจาก monthop-gmail/agent-platform ใน dis-7c741dbb seq 11
+ */
+export interface TaskWithHandoff extends Task {
+  handoff: string | null;
+}
+
+/**
+ * id ของ handoff ที่ยังรอคนรับของ task นั้น
+ *
+ * เอาใบล่าสุดเพราะใบที่เก่ากว่าถือว่าถูกแทนแล้ว และคืน null เมื่องานปิดไปแล้วเพราะ
+ * ไม่มีอะไรให้รับ — กติกาเดียวกับ `state` ของ handoff ใช้ alias `t` ของตาราง tasks
+ */
+const CURRENT_HANDOFF_ID = `(SELECT h.id FROM handoffs h
+      WHERE h.task_id = t.id AND h.status = 'pending' AND t.status != 'done'
+      ORDER BY h.created_at DESC, h.rowid DESC LIMIT 1)`;
+
 export interface Plan {
   id: string;
   workspace_id: string;
@@ -161,6 +182,20 @@ const HAS_NEWER_HANDOFF = `EXISTS (
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/**
+ * ทำให้ "ไม่มีเจ้าของ" มีค่าเดียวคือ null
+ *
+ * เดิม create_task เขียน null ได้แต่ update_task รับเฉพาะ string ทีมที่จะถอดเจ้าของ
+ * จึงต้องส่งค่าว่างมาแทน ผลคือฟิลด์เดียวกันมีสองค่าที่แปลว่าไม่มีเหมือนกัน ซึ่งคนอ่าน
+ * ตารางต้องรู้เองว่าทั้งคู่หมายถึงอย่างเดียวกัน — เจอจริงตอน agent-platform คืนสถานะ
+ * task-b4f135bd เมื่อ 7 ก.ย.
+ */
+function normalizeAssignee(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
 }
 
 async function requireWorkspace(db: D1Database, id: string): Promise<void> {
@@ -315,7 +350,7 @@ export async function createTask(
     title,
     detail,
     status: "open",
-    assigned_to: assignedTo ?? null,
+    assigned_to: normalizeAssignee(assignedTo),
     created_by: author.name,
     created_by_client: author.client,
     created_at: now(),
@@ -363,7 +398,7 @@ export async function updateTask(
   db: D1Database,
   id: string,
   author: Author,
-  changes: { status?: TaskStatus; assigned_to?: string; detail?: string },
+  changes: { status?: TaskStatus; assigned_to?: string | null; detail?: string },
 ): Promise<Task> {
   await getTask(db, id);
 
@@ -375,7 +410,7 @@ export async function updateTask(
     sets.push(`status = ?${params.length}`);
   }
   if (changes.assigned_to !== undefined) {
-    params.push(changes.assigned_to);
+    params.push(normalizeAssignee(changes.assigned_to));
     sets.push(`assigned_to = ?${params.length}`);
   }
   if (changes.detail !== undefined) {
@@ -406,7 +441,7 @@ export async function readTasks(
   workspaceId: string,
   limit: number,
   filters: { status?: TaskStatus; assigned_to?: string } = {},
-): Promise<Page<Task>> {
+): Promise<Page<TaskWithHandoff>> {
   await requireWorkspace(db, workspaceId);
 
   const clauses: string[] = [];
@@ -414,23 +449,41 @@ export async function readTasks(
 
   if (filters.status !== undefined) {
     params.push(filters.status);
-    clauses.push(`status = ?${params.length}`);
+    clauses.push(`t.status = ?${params.length}`);
   }
   if (filters.assigned_to !== undefined) {
     params.push(filters.assigned_to);
-    clauses.push(`assigned_to = ?${params.length}`);
+    clauses.push(`t.assigned_to = ?${params.length}`);
   }
 
   const where = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
 
-  return paginate<Task>(
+  return paginate<TaskWithHandoff>(
     db,
-    `SELECT * FROM tasks WHERE workspace_id = ?1${where}
-      ORDER BY created_at DESC LIMIT ?${params.length + 1}`,
-    `SELECT COUNT(*) AS n FROM tasks WHERE workspace_id = ?1${where}`,
+    `SELECT t.*, ${CURRENT_HANDOFF_ID} AS handoff
+       FROM tasks t WHERE t.workspace_id = ?1${where}
+      ORDER BY t.created_at DESC LIMIT ?${params.length + 1}`,
+    `SELECT COUNT(*) AS n FROM tasks t WHERE t.workspace_id = ?1${where}`,
     params,
     limit,
   );
+}
+
+/**
+ * ถาม handoff ที่ยังรอคนรับของ task ใบเดียว
+ *
+ * แยกจาก `readTasks` เพราะที่นั่นถามพร้อมกันทั้งหน้าใน query เดียวเพื่อไม่ให้เป็น N+1
+ * ส่วนที่นี่ใช้ตอนตอบผลของ `update_task` ซึ่งมี task ใบเดียวอยู่แล้ว
+ */
+export async function getCurrentHandoffId(
+  db: D1Database,
+  taskId: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare(`SELECT ${CURRENT_HANDOFF_ID} AS handoff FROM tasks t WHERE t.id = ?1`)
+    .bind(taskId)
+    .first<{ handoff: string | null }>();
+  return row?.handoff ?? null;
 }
 
 /* ── handoff ──────────────────────────────────────────────────────────── */

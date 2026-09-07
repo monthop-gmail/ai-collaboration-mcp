@@ -10,6 +10,7 @@ import {
   acceptHandoff,
   createHandoff,
   createTask,
+  getCurrentHandoffId,
   readDecisions,
   readPlans,
   recordPlan,
@@ -275,8 +276,12 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         status: z.enum(TASK_STATUSES).optional(),
         assigned_to: z
           .string()
+          .nullable()
           .optional()
-          .describe("Change the owner. Records ownership only — not a handoff."),
+          .describe(
+            "Change the owner. Records ownership only — not a handoff. Pass null " +
+              "to leave the task with no owner.",
+          ),
         detail: z.string().optional(),
       }),
     },
@@ -293,8 +298,10 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           assigned_to: task.assigned_to,
           updated_by: task.updated_by,
           updated_at: task.updated_at,
+          // เช่นเดียวกับ create_task — บอกตรง ๆ ว่ามี handoff รออยู่หรือไม่ ไม่ใช่เงียบ
+          handoff: await getCurrentHandoffId(env.DB, task.id),
           // เตือนเฉพาะตอนที่ผู้เรียกเปลี่ยนผู้รับผิดชอบเองในคำสั่งนี้
-          ...(assigned_to !== undefined && handoffReminder(assigned_to)
+          ...(assigned_to != null && handoffReminder(assigned_to)
             ? { note: handoffReminder(assigned_to) }
             : {}),
         };
@@ -306,7 +313,9 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     {
       description:
         "List tasks in the workspace, newest first. Filter by status or owner to " +
-        "find what is still open or what is yours.",
+        "find what is still open or what is yours. Each row carries 'handoff': the " +
+        "id of the handoff still waiting to be accepted, or null when nobody has " +
+        "been handed this work — an owner alone does not mean it was handed over.",
       inputSchema: z.object({
         workspace: Workspace,
         status: z.enum(TASK_STATUSES).optional(),

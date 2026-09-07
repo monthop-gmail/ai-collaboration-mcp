@@ -6,6 +6,7 @@ import {
   acceptHandoff,
   createHandoff,
   createTask,
+  getCurrentHandoffId,
   getTask,
   readDecisions,
   readHandoffs,
@@ -344,6 +345,92 @@ describe("สภาพของ handoff ที่ยังไม่ถูกร�
     const page = await readHandoffs(env.DB, WS, 10, {});
     const states = page.rows.map((h) => h.state);
     expect(states.filter((x) => x === "waiting")).toHaveLength(1);
+  });
+});
+
+describe("บอกได้ว่าไม่มีเจ้าของ และบอกได้ว่ายังไม่มีใครถูกส่งงาน", () => {
+  /**
+   * เดิม create_task เขียน null ได้แต่ update_task รับเฉพาะ string ทีมที่จะถอดเจ้าของ
+   * จึงต้องส่งค่าว่างมาแทน ฟิลด์เดียวกันจึงมีสองค่าที่แปลว่าไม่มีเหมือนกัน
+   */
+  it("ถอดเจ้าของด้วย null ได้", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt, undefined, "Gemini");
+
+    const after = await updateTask(env.DB, t.id, claude, { assigned_to: null });
+    expect(after.assigned_to).toBeNull();
+  });
+
+  it("ค่าว่างกับช่องว่างล้วนถูกเก็บเป็น null ไม่ใช่สตริงว่าง", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt, undefined, "Gemini");
+    const blanked = await updateTask(env.DB, t.id, claude, { assigned_to: "   " });
+    expect(blanked.assigned_to).toBeNull();
+
+    const created = await createTask(env.DB, WS, "อีกใบ", "", chatgpt, undefined, "  ");
+    expect(created.assigned_to).toBeNull();
+  });
+
+  it("ชื่อที่มีช่องว่างหัวท้ายถูกตัดให้ตรงกับที่ผู้ส่งงานพิมพ์", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt, undefined, " Gemini ");
+    expect(t.assigned_to).toBe("Gemini");
+  });
+
+  /**
+   * เหตุผลของฟิลด์นี้ — ผู้เรียกที่จะเล่าว่าส่งงานให้ทีมใดแล้ว ต้องมองผ่านค่า null
+   * ให้ได้ก่อน ซึ่งยากกว่าการลืมเรียก tool ที่สอง
+   */
+  it("task ที่มีเจ้าของแต่ไม่มีใครถูกส่งงาน คืน handoff เป็น null", async () => {
+    await createTask(env.DB, WS, "งานที่มีแต่เจ้าของ", "", chatgpt, undefined, "Gemini");
+
+    const page = await readTasks(env.DB, WS, 10, {});
+    expect(page.rows[0]!.handoff).toBeNull();
+  });
+
+  it("พอส่งงานจริงแล้ว handoff ชี้ไปที่ใบที่รออยู่", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt);
+    const { handoff } = await createHandoff(env.DB, t.id, "Gemini", "ช่วยต่อ", chatgpt);
+
+    const page = await readTasks(env.DB, WS, 10, {});
+    expect(page.rows[0]!.handoff).toBe(handoff.id);
+    expect(await getCurrentHandoffId(env.DB, t.id)).toBe(handoff.id);
+  });
+
+  it("รับงานไปแล้วไม่มีใบไหนรออยู่อีก", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt);
+    const { handoff } = await createHandoff(env.DB, t.id, "Gemini", "ช่วยต่อ", chatgpt);
+    await acceptHandoff(env.DB, handoff.id, gemini);
+
+    expect(await getCurrentHandoffId(env.DB, t.id)).toBeNull();
+  });
+
+  it("ส่งต่ออีกทอดแล้วชี้ใบล่าสุด ไม่ใช่ใบที่ถูกแทน", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt);
+    await createHandoff(env.DB, t.id, "Claude", "ช่วยที", chatgpt);
+    const { handoff: second } = await createHandoff(env.DB, t.id, "Gemini", "ส่งต่อ", claude);
+
+    expect(await getCurrentHandoffId(env.DB, t.id)).toBe(second.id);
+  });
+
+  it("งานที่ปิดแล้วไม่มี handoff รออยู่ แม้ใบนั้นจะยัง pending", async () => {
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt);
+    await createHandoff(env.DB, t.id, "Gemini", "ช่วยต่อ", chatgpt);
+    await updateTask(env.DB, t.id, chatgpt, { status: "done" });
+
+    expect(await getCurrentHandoffId(env.DB, t.id)).toBeNull();
+    const page = await readTasks(env.DB, WS, 10, {});
+    expect(page.rows[0]!.handoff).toBeNull();
+  });
+
+  it("กรอง get_tasks ตามสถานะและเจ้าของยังทำงานเหมือนเดิมหลังเพิ่มฟิลด์", async () => {
+    const mine = await createTask(env.DB, WS, "ของ Gemini", "", chatgpt, undefined, "Gemini");
+    await createTask(env.DB, WS, "ของคนอื่น", "", chatgpt, undefined, "Claude");
+    await updateTask(env.DB, mine.id, gemini, { status: "in_progress" });
+
+    const byOwner = await readTasks(env.DB, WS, 10, { assigned_to: "Gemini" });
+    expect(byOwner.rows.map((t) => t.id)).toEqual([mine.id]);
+
+    const byStatus = await readTasks(env.DB, WS, 10, { status: "in_progress" });
+    expect(byStatus.rows.map((t) => t.id)).toEqual([mine.id]);
+    expect(byStatus.total).toBe(1);
   });
 });
 
