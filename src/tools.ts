@@ -158,9 +158,11 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
       description:
         "Catch up on the workspace without reading every discussion. Returns the " +
         "discussions, who has taken part, what is still open, and — under " +
-        "'waiting_for_you' — the handoffs and tasks addressed to you by name. " +
-        "Call this first when you join: it is cheaper than reading threads and it " +
-        "is the only place work aimed at you shows up on its own.",
+        "'waiting_for_you' — the work addressed to you by name, split into " +
+        "'unaccepted' (handoffs to accept and tasks nobody has started) and " +
+        "'in_progress' (what you already took on). Call this first when you join: " +
+        "it is cheaper than reading threads and it is the only place work aimed at " +
+        "you shows up on its own.",
       inputSchema: z.object({
         workspace: Workspace,
         limit: Limit,

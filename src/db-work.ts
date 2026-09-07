@@ -82,6 +82,83 @@ export interface Handoff {
   accepted_at: string | null;
 }
 
+/**
+ * สภาพจริงของ handoff — คำนวณจากของรอบตัว ไม่ใช่คอลัมน์ที่ใครตั้งเอง
+ *
+ * คอลัมน์ `status` มีแค่ pending กับ accepted ซึ่งบอกไม่ได้ว่า pending ใบนั้นยังมีใคร
+ * ต้องมารับอยู่จริงหรือค้างเพราะเรื่องมันจบไปทางอื่นแล้ว ผลคือ handoff ที่ตกยุคนอน
+ * pending ตลอดกาลโดยไม่มีกติกา — เจอจริงหนึ่งใบที่ค้างมาแปดวันโดยที่งานปลายทาง
+ * ย้ายมือไปแล้ว
+ *
+ * แยกเป็นค่าที่คำนวณแทนการเพิ่มคอลัมน์ เพราะสิ่งที่ทำให้ handoff ตกยุคคือสถานะของ
+ * task และการมี handoff ใบใหม่กว่า ซึ่งเปลี่ยนได้ตลอดโดยไม่ผ่าน handoff ใบนี้ ถ้าเก็บ
+ * เป็นคอลัมน์จะมีวันที่มันไม่ตรงกับความจริงโดยไม่มีใครรู้
+ *
+ * - `waiting`     ยังรอคนรับอยู่จริง
+ * - `stale`       ยังรอ แต่ค้างเกิน STALE_AFTER_DAYS วัน ควรมีคนตัดสินใจ
+ * - `superseded`  งานเดียวกันถูกส่งต่อด้วยใบที่ใหม่กว่า ใบนี้ไม่ต้องรับแล้ว
+ * - `obsolete`    งานปลายทาง done ไปแล้ว ไม่มีอะไรให้รับ
+ * - `accepted`    มีคนรับไปแล้ว
+ */
+export const HANDOFF_STATES = [
+  "waiting",
+  "stale",
+  "superseded",
+  "obsolete",
+  "accepted",
+] as const;
+export type HandoffState = (typeof HANDOFF_STATES)[number];
+
+/** handoff ที่ยังต้องมีคนมารับ — อีกสองสภาพค้างอยู่เฉย ๆ โดยไม่มีใครต้องทำอะไร */
+export const ACTIONABLE_HANDOFF_STATES: readonly HandoffState[] = ["waiting", "stale"];
+
+/**
+ * ค้างเกินเท่านี้ถือว่าควรมีคนตัดสินใจ ไม่ใช่ปล่อยรอต่อ
+ *
+ * เจ็ดวันมาจากใบที่ค้างจริง — ห้าวันตอนที่ยังไม่มีใครสังเกต และแปดวันตอนที่มีคนมา
+ * สังเกตแล้ว เส้นจึงต้องอยู่ระหว่างนั้น
+ */
+export const STALE_AFTER_DAYS = 7;
+
+function staleCutoff(): string {
+  return new Date(Date.now() - STALE_AFTER_DAYS * 86_400_000).toISOString();
+}
+
+export interface HandoffRow extends Handoff {
+  state: HandoffState;
+}
+
+/**
+ * แถวดิบจาก SQL ที่ยังไม่ได้สรุปสภาพ
+ *
+ * คิด `state` ใน TypeScript ไม่ใช่ใน SQL เพราะเส้นแบ่ง stale ต้องใช้เวลาปัจจุบันเป็น
+ * พารามิเตอร์ ซึ่งจะทำให้ query นับกับ query อ่านต้อง bind ชุดเดียวกันทั้งที่ใช้คนละที่
+ */
+interface HandoffJoinRow extends Handoff {
+  task_status: TaskStatus;
+  has_newer: number;
+}
+
+function handoffState(row: HandoffJoinRow, cutoff: string): HandoffState {
+  if (row.status === "accepted") return "accepted";
+  if (row.task_status === "done") return "obsolete";
+  if (row.has_newer) return "superseded";
+  return row.created_at < cutoff ? "stale" : "waiting";
+}
+
+/**
+ * มี handoff ใบที่ใหม่กว่าของ task เดียวกันหรือไม่
+ *
+ * เทียบ `rowid` ต่อเมื่อเวลาเท่ากัน เพราะสองใบที่สร้างในคำขอเดียวกันได้ timestamp
+ * เดียวกันได้ — เวลาใน Workers ไม่ขยับระหว่างโค้ดที่รันติดกัน ถ้าเทียบแค่เวลาจะกลาย
+ * เป็นว่าทั้งคู่ superseded ซึ่งกันและกันแล้วไม่มีใบไหนเหลือให้รับเลย
+ */
+const HAS_NEWER_HANDOFF = `EXISTS (
+       SELECT 1 FROM handoffs n
+        WHERE n.task_id = h.task_id
+          AND (n.created_at > h.created_at
+               OR (n.created_at = h.created_at AND n.rowid > h.rowid)))`;
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -411,13 +488,27 @@ export async function createHandoff(
   return { handoff, task };
 }
 
+/**
+ * อ่าน handoff ของ workspace เดียว พร้อมสภาพจริงของแต่ละใบ
+ *
+ * รับ `workspaceId` เพราะเดิมไม่รับ แล้วคืน handoff ของทุก workspace ปนกันมา ขณะที่
+ * `get_tasks` กับ `get_workspace_context` scope ตาม workspace ทั้งคู่ ผลคือตัวเลข
+ * ของสอง tool ไม่ตรงกันโดยไม่มีใคร error และของทดสอบใน ws-test ก็ไปโผล่ในรายการ
+ * งานจริงของ ws-001 — เจอจริงหนึ่งใบ
+ *
+ * handoff ไม่มีคอลัมน์ workspace ของมันเอง จึงหาจาก task ที่มันชี้ไป ซึ่งเป็นแหล่ง
+ * เดียวที่ถูกต้องอยู่แล้ว
+ */
 export async function readHandoffs(
   db: D1Database,
+  workspaceId: string,
   limit: number,
   filters: { task_id?: string; to_whom?: string; status?: "pending" | "accepted" } = {},
-): Promise<Page<Handoff>> {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
+): Promise<Page<HandoffRow>> {
+  await requireWorkspace(db, workspaceId);
+
+  const clauses: string[] = ["t.workspace_id = ?1"];
+  const params: unknown[] = [workspaceId];
 
   for (const [column, value] of [
     ["task_id", filters.task_id],
@@ -426,18 +517,29 @@ export async function readHandoffs(
   ] as const) {
     if (value === undefined) continue;
     params.push(value);
-    clauses.push(`${column} = ?${params.length}`);
+    clauses.push(`h.${column} = ?${params.length}`);
   }
 
-  const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+  const where = ` WHERE ${clauses.join(" AND ")}`;
+  const from = " FROM handoffs h JOIN tasks t ON t.id = h.task_id";
 
-  return paginate<Handoff>(
+  const page = await paginate<HandoffJoinRow>(
     db,
-    `SELECT * FROM handoffs${where} ORDER BY created_at DESC LIMIT ?${params.length + 1}`,
-    `SELECT COUNT(*) AS n FROM handoffs${where}`,
+    `SELECT h.*, t.status AS task_status, ${HAS_NEWER_HANDOFF} AS has_newer${from}${where}
+      ORDER BY h.created_at DESC LIMIT ?${params.length + 1}`,
+    `SELECT COUNT(*) AS n${from}${where}`,
     params,
     limit,
   );
+
+  const cutoff = staleCutoff();
+  return {
+    ...page,
+    rows: page.rows.map((row) => {
+      const { task_status: _status, has_newer: _newer, ...handoff } = row;
+      return { ...handoff, state: handoffState(row, cutoff) };
+    }),
+  };
 }
 
 /**
@@ -446,6 +548,10 @@ export async function readHandoffs(
  * ผู้รับคือคนที่เรียก ไม่ใช่ค่าที่ส่งมาใน argument ด้วยเหตุผลเดียวกับผู้เขียนข้อความ
  * และเปลี่ยนงานเป็น `in_progress` พร้อมตั้งผู้รับผิดชอบเป็นชื่อจริงของผู้รับ ซึ่ง
  * อาจไม่ตรงกับ `to_whom` ที่ผู้ส่งพิมพ์ไว้
+ *
+ * รับใบที่ตกยุคแล้วไม่ได้ — ใบที่ชี้ไปงานที่ `done` หรือใบที่ถูกแทนด้วยใบใหม่กว่า
+ * เพราะการรับจะดึงงานที่จบไปแล้วกลับเป็น `in_progress` หรือทำให้สองคนถือใบของงาน
+ * เดียวกันคนละใบ ทั้งสองอย่างทำให้ตารางเล่าเรื่องที่ไม่ได้เกิดขึ้น
  */
 export async function acceptHandoff(
   db: D1Database,
@@ -453,14 +559,32 @@ export async function acceptHandoff(
   author: Author,
 ): Promise<{ handoff: Handoff; task: Task }> {
   const existing = await db
-    .prepare("SELECT * FROM handoffs WHERE id = ?1")
+    .prepare(
+      `SELECT h.*, t.status AS task_status, ${HAS_NEWER_HANDOFF} AS has_newer
+         FROM handoffs h JOIN tasks t ON t.id = h.task_id
+        WHERE h.id = ?1`,
+    )
     .bind(handoffId)
-    .first<Handoff>();
+    .first<HandoffJoinRow>();
   if (!existing) throw new RequestError(`ไม่พบ handoff '${handoffId}'`);
 
   if (existing.status === "accepted") {
     throw new RequestError(
       `handoff นี้ถูกรับไปแล้วโดย ${existing.accepted_by} เมื่อ ${existing.accepted_at}`,
+    );
+  }
+
+  const state = handoffState(existing, staleCutoff());
+  if (state === "obsolete") {
+    throw new RequestError(
+      `รับไม่ได้ — งาน '${existing.task_id}' ที่ handoff นี้ชี้ไปเสร็จไปแล้ว ` +
+        "ถ้ายังมีงานเหลือให้สร้าง task ใหม่แล้วส่งต่อใบใหม่",
+    );
+  }
+  if (state === "superseded") {
+    throw new RequestError(
+      `รับไม่ได้ — งาน '${existing.task_id}' ถูกส่งต่อด้วย handoff ใบที่ใหม่กว่าแล้ว ` +
+        "ดูใบล่าสุดจาก get_handoffs โดยกรอง task_id นี้",
     );
   }
 
@@ -479,9 +603,10 @@ export async function acceptHandoff(
     assigned_to: author.name,
   });
 
+  const { task_status: _status, has_newer: _newer, ...handoff } = existing;
   return {
     handoff: {
-      ...existing,
+      ...handoff,
       status: "accepted",
       accepted_by: author.name,
       accepted_client: author.client,
@@ -726,16 +851,40 @@ export async function resolveDecision(
 
 /* ── ภาพรวมของที่ยังค้าง ─────────────────────────────────────────────── */
 
+export interface WaitingHandoff {
+  id: string;
+  task_id: string;
+  from: string;
+  created_at: string;
+  state: HandoffState;
+}
+
+export interface WaitingTask {
+  id: string;
+  title: string;
+  status: string;
+}
+
 export interface OpenItems {
   decisions_awaiting: number;
   plans_current: number;
   latest_plan: { id: string; title: string } | null;
   /** นับเฉพาะที่ยังไม่ done แยกตามสถานะ */
   tasks: Record<string, number>;
+  /** handoff ที่ยังต้องมีคนมารับจริง ๆ */
   handoffs_pending: number;
+  /** pending แต่ตกยุคแล้ว — ไม่ต้องรับ แต่ต้องไม่หายเงียบ */
+  handoffs_inactive: number;
+  /**
+   * แยกของที่ยังไม่มีใครรับ ออกจากของที่รับไปแล้วและกำลังทำอยู่
+   *
+   * เดิมรวมเป็นกองเดียวแล้วบวกยอดกัน ซึ่งอ่านผิดได้สองทาง — task ที่มาพร้อม handoff
+   * ถูกนับสองครั้ง และงานที่ตัวเองรับไปทำอยู่แล้วขึ้นปนกับงานใหม่ที่ยังไม่มีใครแตะ
+   * ทั้งที่สองอย่างนี้ต้องการการกระทำคนละแบบ: อันแรกต้องรับ อันหลังต้องทำต่อ
+   */
   waiting_for_you: {
-    handoffs: Array<{ id: string; task_id: string; from: string; created_at: string }>;
-    tasks: Array<{ id: string; title: string; status: string }>;
+    unaccepted: { handoffs: WaitingHandoff[]; tasks: WaitingTask[]; total: number };
+    in_progress: { tasks: WaitingTask[]; total: number };
     total: number;
   };
 }
@@ -759,12 +908,19 @@ const WAITING_PREVIEW = 10;
  * `waiting_for_you` จับคู่จากชื่อผู้เรียกซึ่งมาจาก connection ไม่ใช่จาก argument
  * ทีมที่ยังไม่ตั้ง `X-Client-Name` จะใช้ชื่อร่วมกันจึงเห็นงานปนกัน — เป็นเหตุผล
  * อีกข้อที่ทุกทีมควรตั้งชื่อของตัวเอง
+ *
+ * handoff ที่ตกยุคแล้ว (`superseded` หรือ `obsolete`) ไม่ถูกยกมาให้ปลายทางรับ เพราะ
+ * ไม่มีอะไรให้ทำต่อ แต่ยังนับไว้ใน `handoffs_inactive` — ของที่ค้างต้องมองเห็นได้
+ * เสมอ ไม่งั้นก็แค่เปลี่ยนจากค้างเสียงดังเป็นค้างเงียบ
  */
 export async function readOpenItems(
   db: D1Database,
   workspaceId: string,
   myName: string,
 ): Promise<OpenItems> {
+  const cutoff = staleCutoff();
+  const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
+
   const [counts, taskCounts, plan, myHandoffs, myTasks] = await db.batch([
     db
       .prepare(
@@ -773,7 +929,11 @@ export async function readOpenItems(
          UNION ALL
          SELECT 'handoffs', COUNT(*)
            FROM handoffs h JOIN tasks t ON t.id = h.task_id
-          WHERE t.workspace_id = ?1 AND h.status = 'pending'
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND NOT ${inactive}
+         UNION ALL
+         SELECT 'handoffs_inactive', COUNT(*)
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND ${inactive}
          UNION ALL
          SELECT 'plans', COUNT(*)
            FROM plans
@@ -797,13 +957,15 @@ export async function readOpenItems(
       .bind(workspaceId),
     db
       .prepare(
-        `SELECT h.id, h.task_id, h.from_name AS "from", h.created_at
+        `SELECT h.id, h.task_id, h.from_name AS "from", h.created_at,
+                CASE WHEN h.created_at < ?3 THEN 'stale' ELSE 'waiting' END AS state
            FROM handoffs h JOIN tasks t ON t.id = h.task_id
           WHERE t.workspace_id = ?1 AND h.status = 'pending'
             AND lower(h.to_whom) = lower(?2)
+            AND NOT ${inactive}
           ORDER BY h.created_at`,
       )
-      .bind(workspaceId, myName),
+      .bind(workspaceId, myName, cutoff),
     db
       .prepare(
         `SELECT id, title, status FROM tasks
@@ -823,9 +985,17 @@ export async function readOpenItems(
     tasks[row.status] = row.n;
   }
 
-  const handoffRows = myHandoffs.results as OpenItems["waiting_for_you"]["handoffs"];
-  const taskRows = myTasks.results as OpenItems["waiting_for_you"]["tasks"];
+  const handoffRows = myHandoffs.results as WaitingHandoff[];
+  const taskRows = myTasks.results as WaitingTask[];
   const planRow = (plan.results as Array<{ id: string; title: string }>)[0] ?? null;
+
+  // task ที่มี handoff รออยู่แล้วถูกยกมาในกองนั้น การนับซ้ำอีกรอบทำให้ยอดสูงกว่างานจริง
+  const handedOver = new Set(handoffRows.map((h) => h.task_id));
+  const inProgress = taskRows.filter((t) => t.status === "in_progress");
+  const unacceptedTasks = taskRows.filter(
+    (t) => t.status !== "in_progress" && !handedOver.has(t.id),
+  );
+  const unacceptedTotal = handoffRows.length + unacceptedTasks.length;
 
   return {
     decisions_awaiting: byKey.get("decisions") ?? 0,
@@ -833,10 +1003,18 @@ export async function readOpenItems(
     latest_plan: planRow,
     tasks,
     handoffs_pending: byKey.get("handoffs") ?? 0,
+    handoffs_inactive: byKey.get("handoffs_inactive") ?? 0,
     waiting_for_you: {
-      handoffs: handoffRows.slice(0, WAITING_PREVIEW),
-      tasks: taskRows.slice(0, WAITING_PREVIEW),
-      total: handoffRows.length + taskRows.length,
+      unaccepted: {
+        handoffs: handoffRows.slice(0, WAITING_PREVIEW),
+        tasks: unacceptedTasks.slice(0, WAITING_PREVIEW),
+        total: unacceptedTotal,
+      },
+      in_progress: {
+        tasks: inProgress.slice(0, WAITING_PREVIEW),
+        total: inProgress.length,
+      },
+      total: unacceptedTotal + inProgress.length,
     },
   };
 }

@@ -3,7 +3,9 @@ import { z } from "zod";
 import type { Env } from "./env";
 import { resolveAuthor, type StaticIdentity } from "./identity";
 import {
+  ACTIONABLE_HANDOFF_STATES,
   DECISION_STATUSES,
+  STALE_AFTER_DAYS,
   TASK_STATUSES,
   acceptHandoff,
   createHandoff,
@@ -365,9 +367,16 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     "get_handoffs",
     {
       description:
-        "List handoffs, newest first. Call this when you join to see whether work " +
-        "is waiting for you. Defaults to pending ones only.",
+        "List handoffs in the workspace, newest first. Call this when you join to " +
+        "see whether work is waiting for you. Defaults to pending ones only. Each " +
+        "row carries a 'state': 'waiting' still needs someone to accept it, " +
+        "'stale' has been waiting over " +
+        `${STALE_AFTER_DAYS} days and needs a decision rather than more waiting, ` +
+        "'superseded' was replaced by a newer handoff on the same task, and " +
+        "'obsolete' points at a task that is already done — the last two need no " +
+        "one to accept them.",
       inputSchema: z.object({
+        workspace: Workspace,
         status: z
           .enum(["pending", "accepted"])
           .default("pending")
@@ -377,14 +386,29 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         limit: Limit,
       }),
     },
-    async ({ status, to, task_id, limit }) =>
+    async ({ workspace, status, to, task_id, limit }) =>
       run(async () => {
-        const page = await readHandoffs(env.DB, limit, {
+        const page = await readHandoffs(env.DB, workspace, limit, {
           status,
           to_whom: to,
           task_id,
         });
-        return { handoffs: page.rows, has_more: page.has_more, total: page.total };
+        const inactive = page.rows.filter(
+          (h) => !ACTIONABLE_HANDOFF_STATES.includes(h.state) && h.status === "pending",
+        );
+        return {
+          handoffs: page.rows,
+          has_more: page.has_more,
+          total: page.total,
+          ...(inactive.length > 0
+            ? {
+                note:
+                  `${inactive.length} of these are still 'pending' but no longer need ` +
+                  "accepting (superseded or obsolete). Close the loop by finishing or " +
+                  "reassigning the task they point at, not by accepting them.",
+              }
+            : {}),
+        };
       }),
   );
 
