@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { registerTools } from "./tools";
 import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
+import { handleView } from "./view";
 import { staticIdentityFor, type StaticIdentity } from "./identity";
 import type { Env } from "./env";
 
@@ -116,6 +117,11 @@ function getProvider(): OAuthProvider<OAuthEnv> {
 export default {
   async fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
+
+    // หน้าอ่านของคน อยู่นอกเส้นทางของ OAuth ทั้งหมดเพราะมันไม่ใช่ MCP client และ
+    // ไม่มีอะไรให้เขียน คืน null เมื่อไม่ใช่เส้นทางของมัน
+    const view = await handleView(request, env);
+    if (view) return view;
 
     if (pathname === MCP_ROUTE) {
       // ปฏิเสธการให้บริการดีกว่าเปิดโล่งเมื่อยังไม่ได้ตั้งรหัส ถ้าไม่มีค่านี้

@@ -23,6 +23,13 @@ export interface Env {
   APPROVAL_SECRET?: string;
   /** hostname ที่ยอมให้ browser เรียก /mcp ได้ */
   ALLOWED_ORIGIN_HOSTNAMES?: string;
+  /**
+   * รหัสของหน้าอ่านอย่างเดียวที่ `/view`
+   *
+   * แยกจาก `MCP_AUTH_TOKEN` โดยตั้งใจ เพราะรหัสของ MCP เขียนลงโต๊ะได้ ส่วนรหัสนี้
+   * อ่านได้อย่างเดียว ลิงก์ที่หลุดไปจึงเสียหายคนละระดับ ไม่ตั้งค่า = ไม่มีหน้านั้น
+   */
+  VIEW_TOKEN?: string;
 }
 
 /** PoC ใช้ workspace เดียว แต่ schema รองรับหลายอันแล้ว */
