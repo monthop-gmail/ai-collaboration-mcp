@@ -175,12 +175,22 @@ async function renderDiscussion(
  *
  * ไม่ตั้งค่า = ไม่มีหน้านี้ ไม่ใช่เปิดโล่ง
  */
-async function authorized(request: Request, env: Env): Promise<boolean> {
-  if (!env.VIEW_TOKEN) return false;
+type AuthResult = "ok" | "no_key" | "wrong_key";
+
+async function authorized(request: Request, env: Env): Promise<AuthResult> {
+  if (!env.VIEW_TOKEN) return "no_key";
 
   const url = new URL(request.url);
   const fromQuery = url.searchParams.get("key");
-  if (fromQuery) return secretsMatch(fromQuery, env.VIEW_TOKEN);
+  if (fromQuery) {
+    return (await secretsMatch(fromQuery, env.VIEW_TOKEN)) ? "ok" : "wrong_key";
+  }
+
+  // เผื่อทดสอบด้วย curl ซึ่งส่ง header ได้ตรง ๆ โดยไม่ผ่านการตีความของ query string
+  const bearer = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (bearer) {
+    return (await secretsMatch(bearer, env.VIEW_TOKEN)) ? "ok" : "wrong_key";
+  }
 
   const cookie = request.headers
     .get("cookie")
@@ -189,7 +199,10 @@ async function authorized(request: Request, env: Env): Promise<boolean> {
     .find((part) => part.startsWith(`${COOKIE}=`))
     ?.slice(COOKIE.length + 1);
 
-  return cookie ? secretsMatch(decodeURIComponent(cookie), env.VIEW_TOKEN) : false;
+  if (!cookie) return "no_key";
+  return (await secretsMatch(decodeURIComponent(cookie), env.VIEW_TOKEN))
+    ? "ok"
+    : "wrong_key";
 }
 
 /**
@@ -207,10 +220,20 @@ export async function handleView(request: Request, env: Env): Promise<Response |
     );
   }
 
-  if (!(await authorized(request, env))) {
+  // แยกสองกรณีให้ชัด เพราะ "ไม่ได้ส่งรหัสมา" กับ "ส่งมาแล้วไม่ตรง" ต้องแก้คนละแบบ
+  // และรหัสที่มี + / = ในลิงก์จะถูก query string ตีความจนไม่ตรงโดยไม่มีใครรู้ตัว —
+  // อาการเดียวกับชื่อที่ถูกตัดเงียบซึ่ง repo นี้ไล่แก้มาตั้งแต่ต้น
+  const auth = await authorized(request, env);
+  if (auth !== "ok") {
+    const detail =
+      auth === "wrong_key"
+        ? "รหัสไม่ตรง ถ้ารหัสมี + / = อยู่ ตัวอักษรเหล่านั้นถูกตีความในลิงก์จนค่าเพี้ยน " +
+          "ให้ใช้รหัสที่เป็นตัวอักษรกับตัวเลขล้วน หรือส่งมาทาง Authorization: Bearer แทน"
+        : "ยังไม่ได้ส่งรหัสมา เปิดด้วยลิงก์ที่มี ?key= ต่อท้าย";
     return new Response(
-      `<!doctype html><meta charset="utf-8"><title>ต้องมีรหัส</title>` +
-        `<p style="font:15px sans-serif;padding:24px">ต้องมีรหัสเข้าดู — เปิดด้วยลิงก์ที่มี <code>?key=</code></p>`,
+      `<!doctype html><html lang="th"><head><meta charset="utf-8"><title>เข้าดูไม่ได้</title>` +
+        `<style>${STYLE}</style></head><body><h1>เข้าดูไม่ได้</h1>` +
+        `<div class="muted">${esc(detail)}</div></body></html>`,
       { status: 401, headers: { "content-type": "text/html; charset=utf-8" } },
     );
   }

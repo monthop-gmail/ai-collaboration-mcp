@@ -66,6 +66,36 @@ describe("หน้าอ่านอย่างเดียว", () => {
     expect(cookie).toContain("SameSite=Strict");
   });
 
+  /**
+   * รหัสที่มี + / = จะถูก query string ตีความจนค่าเพี้ยนโดยไม่มีใครรู้ตัว เจอจริงตอน
+   * เปิดหน้านี้ครั้งแรก ข้อความสองแบบจึงต้องแยกกัน ไม่งั้นคนที่เจอ 401 ไม่รู้ว่าต้อง
+   * แก้ที่ลิงก์หรือแก้ที่รหัส
+   */
+  it("บอกต่างกันระหว่างไม่ได้ส่งรหัส กับส่งมาแล้วไม่ตรง", async () => {
+    const missing = await handleView(get("/view"), withToken(TOKEN));
+    expect(await missing!.text()).toContain("ยังไม่ได้ส่งรหัสมา");
+
+    const wrong = await handleView(get("/view?key=ผิด"), withToken(TOKEN));
+    expect(await wrong!.text()).toContain("รหัสไม่ตรง");
+  });
+
+  it("ส่งรหัสทาง Authorization ได้ เพราะ header ไม่ผ่านการตีความของ query string", async () => {
+    await createDiscussion(env.DB, WS, "หัวข้อ", chatgpt);
+
+    const ok = await handleView(
+      get("/view", { authorization: `Bearer ${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    expect(ok!.status).toBe(200);
+    expect(await ok!.text()).toContain("หัวข้อ");
+
+    const bad = await handleView(
+      get("/view", { authorization: "Bearer ผิด" }),
+      withToken(TOKEN),
+    );
+    expect(bad!.status).toBe(401);
+  });
+
   it("มี cookie ที่ถูกต้องแล้วอ่านรายการกระทู้ได้", async () => {
     await createDiscussion(env.DB, WS, "หัวข้อทดสอบ", chatgpt);
 
