@@ -358,7 +358,16 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         context: z
           .string()
           .min(1)
-          .describe("What you did, what remains, and anything that blocked you"),
+          .describe(
+            // สองกรณีเพราะ handoff มีสองแบบจริง — ส่งต่องานที่ทำค้างไว้ กับมอบงานใหม่
+            // พร้อมโจทย์ ถ้อยคำเดิมครอบแต่แบบแรก ทำให้ handoff ที่ดีที่สุดที่ระบบเคยมี
+            // (ho-932138dd) สอบตกทั้งที่ผู้รับเองยกว่าเป็นตัวอย่างที่ดี — ข้อสังเกตจาก
+            // monthop-gmail/agent-platform ใน dis-96c2a3fa seq 7 ซึ่งเป็นผู้รับใบนั้น
+            "For work already under way: what you did, what remains, and anything " +
+              "that blocked you. For work that starts here: where the context lives, " +
+              "what angle you want, what is out of scope this round, and where the " +
+              "result should go.",
+          ),
       }),
     },
     async ({ task_id, to, context }) =>
