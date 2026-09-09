@@ -206,12 +206,53 @@ function source(discussionId: string | null, workspace: string): string {
   );
 }
 
-async function renderItems(env: Env, workspace: string): Promise<Response> {
-  const [decisions, handoffs, tasks] = await Promise.all([
+/**
+ * บอกว่าซ่อนอะไรไปเท่าไร แทนที่จะซ่อนเงียบ
+ *
+ * ค่าเริ่มต้นของหน้านี้คือแสดงเฉพาะของที่ยังค้าง เพราะของที่ปิดแล้วสะสมไปเรื่อย ๆ จน
+ * กลบของที่ต้องทำ แต่การกรองที่ไม่บอกว่ากรองอะไรออกไปคือ **ผลที่ถูกตัดโดยไม่มีสัญญาณ**
+ * ซึ่งเป็นความล้มเหลวชนิดที่ repo นี้ตั้งขึ้นมาเพื่อกำจัด ทุกส่วนจึงบอกจำนวนที่ซ่อนพร้อม
+ * ลิงก์ไปดูของครบเสมอ
+ */
+function hiddenNote(count: number, showAll: boolean, workspace: string): string {
+  if (showAll || count === 0) return "";
+  const href = `${VIEW_ROUTE}/${ITEMS_PATH}?ws=${encodeURIComponent(workspace)}&all=1`;
+  return `<div class="muted">ซ่อน ${count} รายการที่ปิดแล้ว · <a href="${href}">ดูทั้งหมด</a></div>`;
+}
+
+async function renderItems(
+  env: Env,
+  workspace: string,
+  showAll: boolean,
+): Promise<Response> {
+  const [allDecisions, allHandoffs, allTasks] = await Promise.all([
     readDecisions(env.DB, workspace, ITEM_LIMIT),
     readHandoffs(env.DB, workspace, ITEM_LIMIT, {}),
     readTasks(env.DB, workspace, ITEM_LIMIT),
   ]);
+
+  // "ค้าง" ของแต่ละชนิดไม่เหมือนกัน — decision คือยังไม่มีใครเคาะ handoff คือยังไม่มีใคร
+  // รับ (รวมใบที่ตกยุคซึ่งค้างอยู่จริงแม้ไม่ต้องรับ) ส่วน task คือยังไม่ done
+  const decisions = {
+    ...allDecisions,
+    rows: showAll
+      ? allDecisions.rows
+      : allDecisions.rows.filter((d) => d.status === "proposed"),
+  };
+  const handoffs = {
+    ...allHandoffs,
+    rows: showAll ? allHandoffs.rows : allHandoffs.rows.filter((h) => h.status === "pending"),
+  };
+  const tasks = {
+    ...allTasks,
+    rows: showAll ? allTasks.rows : allTasks.rows.filter((t) => t.status !== "done"),
+  };
+
+  const hidden = {
+    decisions: allDecisions.rows.length - decisions.rows.length,
+    handoffs: allHandoffs.rows.length - handoffs.rows.length,
+    tasks: allTasks.rows.length - tasks.rows.length,
+  };
 
   const decisionRows = decisions.rows
     .map((d) => {
@@ -262,17 +303,25 @@ async function renderItems(env: Env, workspace: string): Promise<Response> {
     .join("");
 
   const empty = `<div class="muted item">ไม่มี</div>`;
+  const back = `${VIEW_ROUTE}?ws=${encodeURIComponent(workspace)}`;
+  const onlyOpen = `${VIEW_ROUTE}/${ITEMS_PATH}?ws=${encodeURIComponent(workspace)}`;
 
   return page(
-    `ของที่ค้าง — ${workspace}`,
-    `<div class="top"><h1>ของที่ค้างใน ${esc(workspace)}</h1>` +
-      `<a class="muted" href="${VIEW_ROUTE}?ws=${encodeURIComponent(workspace)}">← กลับ</a></div>` +
-      `<div class="muted">decision ${decisions.total} · handoff ${handoffs.total} · งาน ${tasks.total}</div>` +
+    `${showAll ? "ของทั้งหมด" : "ของที่ค้าง"} — ${workspace}`,
+    `<div class="top"><h1>${showAll ? "ของทั้งหมด" : "ของที่ค้าง"}ใน ${esc(workspace)}</h1>` +
+      `<a class="muted" href="${back}">← กลับ</a></div>` +
+      `<div class="muted">ทั้ง workspace มี decision ${allDecisions.total} · ` +
+      `handoff ${allHandoffs.total} · งาน ${allTasks.total}` +
+      (showAll ? ` · <a href="${onlyOpen}">แสดงเฉพาะที่ค้าง</a>` : "") +
+      `</div>` +
       `<h2 class="section" id="decisions">Decision</h2>` +
+      hiddenNote(hidden.decisions, showAll, workspace) +
       (decisionRows || empty) +
       `<h2 class="section" id="handoffs">Handoff</h2>` +
+      hiddenNote(hidden.handoffs, showAll, workspace) +
       (handoffRows || empty) +
       `<h2 class="section" id="tasks">งาน</h2>` +
+      hiddenNote(hidden.tasks, showAll, workspace) +
       (taskRows || empty) +
       `<div class="note">หน้านี้อ่านอย่างเดียว สถานะของ handoff คำนวณสดจากงานที่มันชี้ไป — ` +
       `waiting ยังรอคนรับ · stale รอเกินเจ็ดวัน · superseded ถูกแทนด้วยใบใหม่กว่า · ` +
@@ -371,7 +420,9 @@ export async function handleView(request: Request, env: Env): Promise<Response |
   const id = url.pathname.slice(VIEW_ROUTE.length + 1);
 
   try {
-    if (id === ITEMS_PATH) return await renderItems(env, workspace);
+    if (id === ITEMS_PATH) {
+      return await renderItems(env, workspace, url.searchParams.get("all") === "1");
+    }
     if (id) return await renderDiscussion(env, id, workspace);
 
     const [context, open] = await Promise.all([

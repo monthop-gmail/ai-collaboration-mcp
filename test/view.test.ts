@@ -3,15 +3,18 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { resetDatabase } from "./apply-schema";
 import { createDiscussion, postMessage } from "../src/db";
 import {
+  acceptHandoff,
   createHandoff,
   createTask,
   recordDecision,
+  resolveDecision,
   updateTask,
 } from "../src/db-work";
 import { handleView } from "../src/view";
 import type { Env } from "../src/env";
 
 const chatgpt = { client: "c-chatgpt", name: "ChatGPT" };
+const claude = { client: "c-claude", name: "Claude" };
 const WS = "ws-001";
 const TOKEN = "s3cret-view";
 
@@ -226,6 +229,58 @@ describe("หน้าอ่านอย่างเดียว", () => {
     // หัวข้ออยู่นอก details ส่วนเนื้ออยู่ใน — เนื้อต้องมาหลัง details ที่เปิด
     expect(html.indexOf("หัวข้อสั้น")).toBeLessThan(html.indexOf("<details>"));
     expect(html.indexOf("<details>")).toBeLessThan(html.indexOf("เนื้อที่ยาวมากของข้อสรุป"));
+  });
+
+  /**
+   * ค่าเริ่มต้นแสดงเฉพาะของที่ค้าง เพราะของที่ปิดแล้วสะสมจนกลบของที่ต้องทำ แต่การกรอง
+   * ที่ไม่บอกว่ากรองอะไรออกคือผลที่ถูกตัดโดยไม่มีสัญญาณ ซึ่งเป็นความล้มเหลวชนิดที่
+   * repo นี้ตั้งขึ้นมาเพื่อกำจัด
+   */
+  it("ค่าเริ่มต้นซ่อนของที่ปิดแล้ว และบอกว่าซ่อนไปกี่รายการ", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+    await recordDecision(env.DB, WS, "ข้อสรุปที่ยังค้าง", "x", chatgpt, dis.id);
+    const closed = await recordDecision(env.DB, WS, "ข้อสรุปที่ปิดแล้ว", "x", chatgpt, dis.id);
+    await resolveDecision(env.DB, closed.id, "approved", "เอาอันนี้", claude);
+
+    const open = await createTask(env.DB, WS, "งานที่ยังค้าง", "", chatgpt);
+    const finished = await createTask(env.DB, WS, "งานที่ปิดแล้ว", "", chatgpt);
+    await updateTask(env.DB, finished.id, chatgpt, { status: "done" });
+    const { handoff } = await createHandoff(env.DB, open.id, "Gemini", "ช่วยต่อ", chatgpt);
+    const takenTask = await createTask(env.DB, WS, "งานที่รับไปแล้ว", "", chatgpt);
+    const taken = await createHandoff(env.DB, takenTask.id, "Claude", "ช่วยที", chatgpt);
+    await acceptHandoff(env.DB, taken.handoff.id, claude);
+
+    const res = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain("ข้อสรุปที่ยังค้าง");
+    expect(html).not.toContain("ข้อสรุปที่ปิดแล้ว");
+    expect(html).toContain("งานที่ยังค้าง");
+    expect(html).not.toContain("งานที่ปิดแล้ว");
+    expect(html).toContain(handoff.id);
+    expect(html).not.toContain(taken.handoff.id);
+    // ของที่ซ่อนต้องมีเสียง ไม่ใช่หายไปเฉย ๆ
+    expect(html).toContain("ซ่อน 1 รายการที่ปิดแล้ว");
+    expect(html).toContain("ดูทั้งหมด");
+  });
+
+  it("ใส่ all=1 แล้วเห็นครบ พร้อมทางกลับไปดูเฉพาะที่ค้าง", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+    const closed = await recordDecision(env.DB, WS, "ข้อสรุปที่ปิดแล้ว", "x", chatgpt, dis.id);
+    await resolveDecision(env.DB, closed.id, "approved", "เอาอันนี้", claude);
+
+    const res = await handleView(
+      get("/view/items?all=1", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain("ข้อสรุปที่ปิดแล้ว");
+    expect(html).toContain("แสดงเฉพาะที่ค้าง");
+    expect(html).not.toContain("ซ่อน");
   });
 
   it("หน้าของที่ค้างก็หนีอักขระเหมือนกัน", async () => {
