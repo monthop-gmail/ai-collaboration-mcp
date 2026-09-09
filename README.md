@@ -470,20 +470,21 @@ client ที่ผ่าน OAuth แล้วแนบ `X-Client-Name` ชื�
 
 ## เริ่มใช้
 
+**จะเอา repo นี้ไปตั้งโต๊ะของตัวเอง** — อ่าน [SELF_HOST.md](SELF_HOST.md) ซึ่งครอบตั้งแต่
+สร้าง D1/KV ของตัวเอง ต่อ client แต่ละแบบ ไปจนถึงของที่ตั้งใจไม่มีและปัญหาที่เจอบ่อย
+
+**อย่าขอ workspace ในโต๊ะของคนอื่นถ้างานไม่เกี่ยวกัน** — `workspace` เป็นขอบเขตการจัดกลุ่ม
+ไม่ใช่ขอบเขตความปลอดภัย ใครถือ token อ่านได้ทุก workspace
+
+สำหรับคนที่ดูแล repo นี้เอง
+
 ```bash
 npm install
-npx wrangler d1 create ai-collab          # เอา database_id ไปใส่ wrangler.jsonc
-npm run db:remote                          # สร้างตาราง (database ใหม่ใช้ schema.sql พอ)
-npx wrangler secret put MCP_AUTH_TOKEN
-npm run deploy
-```
-
-พัฒนาในเครื่อง
-
-```bash
 npm run db:local    # สร้างตารางใน D1 ของเครื่อง
 npm run dev
 npm test            # รันกับ D1 จริงใน Workers runtime ไม่ใช่ mock
+npm run typecheck
+npm run deploy
 ```
 
 test ใช้ `@cloudflare/vitest-pool-workers` เพื่อให้ได้ D1 จริง เพราะความถูกต้อง
