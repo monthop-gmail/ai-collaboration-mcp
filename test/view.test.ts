@@ -2,6 +2,12 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetDatabase } from "./apply-schema";
 import { createDiscussion, postMessage } from "../src/db";
+import {
+  createHandoff,
+  createTask,
+  recordDecision,
+  updateTask,
+} from "../src/db-work";
 import { handleView } from "../src/view";
 import type { Env } from "../src/env";
 
@@ -161,16 +167,106 @@ describe("หน้าอ่านอย่างเดียว", () => {
     expect(await res!.text()).toContain("ไม่พบ");
   });
 
-  it("ไม่มี JavaScript ในหน้าเลย เพราะหน้านี้อ่านอย่างเดียว", async () => {
-    await createDiscussion(env.DB, WS, "หัวข้อ", chatgpt);
-
+  /**
+   * ตัวเลขในแถบสถานะเป็นของที่คนอยากกดดูต่อ ถ้ากดไม่ได้ก็ต้องไปเรียก tool เอง
+   * ซึ่งเป็นด่านเดียวกับที่หน้านี้ตั้งใจเอาออก
+   */
+  it("ตัวเลขในแถบลิงก์ไปหน้าของที่ค้าง", async () => {
     const res = await handleView(
       get("/view", { cookie: `collab_view=${TOKEN}` }),
       withToken(TOKEN),
     );
     const html = await res!.text();
 
-    expect(html).not.toContain("<script");
-    expect(html).not.toContain("<form");
+    expect(html).toContain(`${"/view"}/items?ws=ws-001#decisions`);
+    expect(html).toContain(`${"/view"}/items?ws=ws-001#handoffs`);
+    expect(html).toContain(`${"/view"}/items?ws=ws-001#tasks`);
+  });
+
+  it("หน้าของที่ค้างแสดงครบทั้งสามชนิดพร้อม anchor", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+    await recordDecision(env.DB, WS, "ข้อสรุปทดสอบ", "เหตุผลของข้อสรุป", chatgpt, dis.id);
+    const task = await createTask(env.DB, WS, "งานทดสอบ", "รายละเอียดงาน", chatgpt, dis.id);
+    await createHandoff(env.DB, task.id, "Gemini", "บริบทที่ส่งมาด้วย", chatgpt);
+
+    const res = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(res!.status).toBe(200);
+    expect(html).toContain('id="decisions"');
+    expect(html).toContain('id="handoffs"');
+    expect(html).toContain('id="tasks"');
+    expect(html).toContain("ข้อสรุปทดสอบ");
+    expect(html).toContain("งานทดสอบ");
+    expect(html).toContain("ส่งถึง Gemini");
+    // สถานะที่คำนวณสดต้องโผล่ให้คนอ่านเห็น ไม่ใช่แค่ pending/accepted ดิบ ๆ
+    expect(html).toContain("waiting");
+    expect(html).toContain("proposed");
+  });
+
+  /**
+   * detail ของ decision บางใบยาวห้าพันตัวอักษร ถ้าไม่พับหน้าจะกวาดตาไม่ได้
+   * ใช้ details ของ HTML ล้วนเพราะหน้านี้ห้ามมี JavaScript
+   */
+  it("เนื้อยาวถูกพับไว้ใน details ไม่ใช่แสดงเต็มทันที", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+    await recordDecision(env.DB, WS, "หัวข้อสั้น", "เนื้อที่ยาวมากของข้อสรุป", chatgpt, dis.id);
+
+    const res = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain("<details>");
+    expect(html).toContain("อ่านเนื้อเต็ม");
+    // หัวข้ออยู่นอก details ส่วนเนื้ออยู่ใน — เนื้อต้องมาหลัง details ที่เปิด
+    expect(html.indexOf("หัวข้อสั้น")).toBeLessThan(html.indexOf("<details>"));
+    expect(html.indexOf("<details>")).toBeLessThan(html.indexOf("เนื้อที่ยาวมากของข้อสรุป"));
+  });
+
+  it("หน้าของที่ค้างก็หนีอักขระเหมือนกัน", async () => {
+    await createTask(env.DB, WS, "<b>งาน</b>", "<script>alert(3)</script>", chatgpt);
+
+    const res = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).not.toContain("<b>งาน</b>");
+    expect(html).not.toContain("<script>alert(3)</script>");
+    expect(html).toContain("&lt;b&gt;");
+  });
+
+  it("workspace ที่ไม่มีอยู่ในหน้าของที่ค้าง ได้หน้าไม่พบ", async () => {
+    const res = await handleView(
+      get("/view/items?ws=ws-ไม่มีจริง", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+
+    expect(await res!.text()).toContain("ไม่พบ");
+  });
+
+  it("ไม่มี JavaScript ในหน้าเลย เพราะหน้านี้อ่านอย่างเดียว", async () => {
+    await createDiscussion(env.DB, WS, "หัวข้อ", chatgpt);
+
+    const list = await handleView(
+      get("/view", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const items = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+
+    for (const html of [await list!.text(), await items!.text()]) {
+      expect(html).not.toContain("<script");
+      expect(html).not.toContain("<form");
+      expect(html).not.toContain("onclick");
+    }
   });
 });

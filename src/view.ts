@@ -14,7 +14,7 @@
  */
 
 import { readMessages, readWorkspaceContext, getDiscussion } from "./db";
-import { readOpenItems } from "./db-work";
+import { readDecisions, readHandoffs, readOpenItems, readTasks } from "./db-work";
 import { secretsMatch } from "./http";
 import type { Env } from "./env";
 import { DEFAULT_WORKSPACE } from "./env";
@@ -24,6 +24,10 @@ export const VIEW_ROUTE = "/view";
 /** เพดานข้อความต่อหน้า สูงกว่าฝั่ง tool เพราะคนอ่านทีเดียวจบดีกว่าไล่กดหน้า */
 const MESSAGE_LIMIT = 500;
 const DISCUSSION_LIMIT = 100;
+const ITEM_LIMIT = 200;
+
+/** เส้นทางของหน้ารวมของค้าง แยกจากหน้ากระทู้เพราะ id ของกระทู้ขึ้นต้นด้วย dis- */
+const ITEMS_PATH = "items";
 
 const COOKIE = "collab_view";
 
@@ -78,6 +82,15 @@ h2 { font-size: 16px; margin: 0 0 6px; font-weight: 600; }
 .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .note { margin-top: 24px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--card); font-size: 13px; color: var(--muted); }
+.bar a { text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.item { padding: 14px 0; border-top: 1px solid var(--line); }
+.item h2 { margin-bottom: 4px; }
+.tag { border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-size: 11px;
+  color: var(--muted); margin-right: 6px; white-space: nowrap; }
+details { margin-top: 8px; }
+summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+details .body { margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--line); }
+h2.section { margin: 32px 0 0; font-size: 17px; scroll-margin-top: 12px; }
 `;
 
 function page(title: string, body: string): Response {
@@ -111,6 +124,7 @@ function renderList(
     .join("");
 
   const other = workspace === DEFAULT_WORKSPACE ? "ws-test" : DEFAULT_WORKSPACE;
+  const items = `${VIEW_ROUTE}/${ITEMS_PATH}?ws=${encodeURIComponent(workspace)}`;
 
   return page(
     `${context.workspace.name} — ai-collab`,
@@ -119,10 +133,10 @@ function renderList(
       `<div class="muted">${esc(context.workspace.id)} · ${context.total_discussions} กระทู้ · ` +
       `${context.participants.length} ผู้ร่วม</div>` +
       `<div class="bar">` +
-      `<span><b>${open.decisions_awaiting}</b> decision รอเคาะ</span>` +
-      `<span><b>${open.handoffs_pending}</b> handoff รอคนรับ</span>` +
-      `<span><b>${open.handoffs_inactive}</b> handoff ตกยุค</span>` +
-      `<span>งานค้าง: ${tasks || "ไม่มี"}</span>` +
+      `<span><a href="${items}#decisions"><b>${open.decisions_awaiting}</b> decision รอเคาะ</a></span>` +
+      `<span><a href="${items}#handoffs"><b>${open.handoffs_pending}</b> handoff รอคนรับ</a></span>` +
+      `<span><a href="${items}#handoffs"><b>${open.handoffs_inactive}</b> handoff ตกยุค</a></span>` +
+      `<span><a href="${items}#tasks">งานค้าง: ${tasks || "ไม่มี"}</a></span>` +
       `<span>contract 2</span>` +
       `</div>` +
       rows +
@@ -164,6 +178,105 @@ async function renderDiscussion(
       (page_.has_more
         ? `<div class="note">แสดง ${page_.messages.length} จาก ${page_.total} ข้อความ</div>`
         : ""),
+  );
+}
+
+/**
+ * เนื้อยาว ๆ พับไว้ให้กางเอง
+ *
+ * detail ของ decision บางใบยาวห้าพันตัวอักษร ถ้าแสดงเต็มทุกใบหน้าจะกลายเป็นกำแพง
+ * ข้อความที่กวาดตาไม่ได้ ใช้ `<details>` ของ HTML ล้วนเพราะไม่ต้องมี JavaScript
+ * และเปิดค้างได้เองเวลาสั่งพิมพ์หน้าหรือค้นด้วย Ctrl+F ในเบราว์เซอร์ที่รองรับ
+ */
+function fold(label: string, body: string): string {
+  if (!body.trim()) return "";
+  return `<details><summary>${esc(label)}</summary><div class="body">${esc(body)}</div></details>`;
+}
+
+function tag(text: string): string {
+  return `<span class="tag">${esc(text)}</span>`;
+}
+
+/** ลิงก์กลับไปกระทู้ต้นทาง — ของที่ค้างเกือบทุกใบมีที่มาอยู่ในกระทู้ใดกระทู้หนึ่ง */
+function source(discussionId: string | null, workspace: string): string {
+  if (!discussionId) return "";
+  return (
+    `<div class="muted">↳ <a href="${VIEW_ROUTE}/${esc(discussionId)}` +
+    `?ws=${encodeURIComponent(workspace)}">กระทู้ต้นทาง</a></div>`
+  );
+}
+
+async function renderItems(env: Env, workspace: string): Promise<Response> {
+  const [decisions, handoffs, tasks] = await Promise.all([
+    readDecisions(env.DB, workspace, ITEM_LIMIT),
+    readHandoffs(env.DB, workspace, ITEM_LIMIT, {}),
+    readTasks(env.DB, workspace, ITEM_LIMIT),
+  ]);
+
+  const decisionRows = decisions.rows
+    .map((d) => {
+      const closed = d.decided_by
+        ? `ปิดโดย ${esc(d.decided_by)} (${esc(d.decided_by_kind ?? "")}) · ${when(d.decided_at)}`
+        : "ยังไม่มีใครเคาะ";
+      const replaced = d.superseded_by
+        ? `<div class="muted">ใช้ ${esc(d.superseded_by)} แทน</div>`
+        : "";
+      return (
+        `<div class="item"><h2>${tag(d.status)}${esc(d.title)}</h2>` +
+        `<div class="muted">เสนอโดย ${esc(d.proposed_by)} · ${when(d.created_at)}</div>` +
+        `<div class="muted">${closed}</div>` +
+        replaced +
+        source(d.discussion_id, workspace) +
+        fold("อ่านเนื้อเต็ม", d.detail) +
+        (d.decided_reason ? fold("เหตุผลที่ปิด", d.decided_reason) : "") +
+        `<div class="muted">${esc(d.id)}</div></div>`
+      );
+    })
+    .join("");
+
+  const handoffRows = handoffs.rows
+    .map(
+      (h) =>
+        `<div class="item"><h2>${tag(h.state)}ส่งถึง ${esc(h.to_whom)}</h2>` +
+        `<div class="muted">จาก ${esc(h.from_name)} · ${when(h.created_at)}` +
+        (h.accepted_by ? ` · รับโดย ${esc(h.accepted_by)} ${when(h.accepted_at)}` : "") +
+        `</div><div class="muted">งาน ${esc(h.task_id)}</div>` +
+        fold("บริบทที่ส่งมาด้วย", h.context) +
+        `<div class="muted">${esc(h.id)}</div></div>`,
+    )
+    .join("");
+
+  const taskRows = tasks.rows
+    .map(
+      (t) =>
+        `<div class="item"><h2>${tag(t.status)}${esc(t.title)}</h2>` +
+        `<div class="muted">เจ้าของ ${esc(t.assigned_to ?? "ยังไม่มี")} · ` +
+        `เปิดโดย ${esc(t.created_by)} ${when(t.created_at)}` +
+        (t.updated_by ? ` · แก้ล่าสุดโดย ${esc(t.updated_by)} ${when(t.updated_at)}` : "") +
+        `</div>` +
+        `<div class="muted">handoff ที่รออยู่: ${t.handoff ? esc(t.handoff) : "ไม่มี"}</div>` +
+        source(t.discussion_id, workspace) +
+        fold("อ่านรายละเอียด", t.detail) +
+        `<div class="muted">${esc(t.id)}</div></div>`,
+    )
+    .join("");
+
+  const empty = `<div class="muted item">ไม่มี</div>`;
+
+  return page(
+    `ของที่ค้าง — ${workspace}`,
+    `<div class="top"><h1>ของที่ค้างใน ${esc(workspace)}</h1>` +
+      `<a class="muted" href="${VIEW_ROUTE}?ws=${encodeURIComponent(workspace)}">← กลับ</a></div>` +
+      `<div class="muted">decision ${decisions.total} · handoff ${handoffs.total} · งาน ${tasks.total}</div>` +
+      `<h2 class="section" id="decisions">Decision</h2>` +
+      (decisionRows || empty) +
+      `<h2 class="section" id="handoffs">Handoff</h2>` +
+      (handoffRows || empty) +
+      `<h2 class="section" id="tasks">งาน</h2>` +
+      (taskRows || empty) +
+      `<div class="note">หน้านี้อ่านอย่างเดียว สถานะของ handoff คำนวณสดจากงานที่มันชี้ไป — ` +
+      `waiting ยังรอคนรับ · stale รอเกินเจ็ดวัน · superseded ถูกแทนด้วยใบใหม่กว่า · ` +
+      `obsolete งานปลายทางปิดแล้ว</div>`,
   );
 }
 
@@ -258,6 +371,7 @@ export async function handleView(request: Request, env: Env): Promise<Response |
   const id = url.pathname.slice(VIEW_ROUTE.length + 1);
 
   try {
+    if (id === ITEMS_PATH) return await renderItems(env, workspace);
     if (id) return await renderDiscussion(env, id, workspace);
 
     const [context, open] = await Promise.all([
