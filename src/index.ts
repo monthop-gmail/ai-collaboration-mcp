@@ -5,7 +5,7 @@ import { registerTools } from "./tools";
 import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
 import { handleView } from "./view";
-import { staticIdentityFor, type StaticIdentity } from "./identity";
+import { nameForToken, staticIdentityFor, type StaticIdentity } from "./identity";
 import type { Env } from "./env";
 
 const MCP_ROUTE = "/mcp";
@@ -67,18 +67,25 @@ function originOptions(env: Env): { allowedOriginHostnames?: string[] | "*" } {
   return hostnames.length > 0 ? { allowedOriginHostnames: hostnames } : {};
 }
 
+/** โทเค็นที่แนบมาในคำขอ ถ้ามี */
+function bearerToken(request: Request): string | undefined {
+  return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+}
+
 const mcpApiHandler = {
-  fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
     // คำนวณชื่อสำรองให้ทุกคำขอ ไม่ต้องแยกว่ามาทางไหน เพราะ `resolveAuthor` ให้
-    // ตัวตนจาก OAuth ชนะเสมอเมื่อมี — ชื่อจาก header จึงมีผลเฉพาะเส้น static bearer
-    const identity = staticIdentityFor(request, env.STATIC_CLIENT_NAME);
+    // ตัวตนจาก OAuth ชนะเสมอเมื่อมี — ชื่อจาก header หรือจากโทเค็นจึงมีผลเฉพาะ
+    // เส้น static bearer ส่วนคำขอที่มาทาง OAuth ถือโทเค็นคนละใบอยู่แล้วจึงไม่ตรง
+    // กับรายการนี้และไม่ได้ชื่อจากตรงนี้
+    const token = bearerToken(request);
+    const tokenName = token ? await nameForToken(token, env.MCP_AUTH_TOKENS) : undefined;
+    const identity = staticIdentityFor(request, env.STATIC_CLIENT_NAME, tokenName);
 
     // ชื่อผิดรูปแบบต้องรู้ทันทีตั้งแต่ต่อไม่ติด ดีกว่าโพสต์ไปเรื่อย ๆ ในชื่อที่
     // ไม่ตรงกับที่ผู้ส่งงานระบุไว้แล้วสงสัยทีหลังว่าทำไมไม่มีงานเข้า
     if (!identity.ok) {
-      return Promise.resolve(
-        json({ error: "invalid_client_name", detail: identity.reason }, 400),
-      );
+      return json({ error: "invalid_client_name", detail: identity.reason }, 400);
     }
 
     return getHandler(env, identity.identity)(request, env, ctx);
@@ -93,9 +100,14 @@ const mcpApiHandler = {
  * handler เดียวกัน แต่ **ได้ตัวตนคนละแบบ** — ทางแรกไม่มี identity จาก DCR ให้อ่าน
  */
 async function hasStaticBearer(request: Request, env: Env): Promise<boolean> {
-  if (!env.MCP_AUTH_TOKEN) return false;
-  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const token = bearerToken(request);
   if (!token) return false;
+
+  // โทเค็นเฉพาะใบใน `MCP_AUTH_TOKENS` ใช้เข้าได้เท่ากับโทเค็นหลัก ต่างกันแค่ชื่อที่
+  // บันทึกให้ ไม่ใช่สิทธิ์ที่ได้ — ระบบนี้ยังไม่มีสิทธิ์แยกตามผู้เรียก
+  if (await nameForToken(token, env.MCP_AUTH_TOKENS)) return true;
+
+  if (!env.MCP_AUTH_TOKEN) return false;
   return secretsMatch(token, env.MCP_AUTH_TOKEN);
 }
 
@@ -126,7 +138,7 @@ export default {
     if (pathname === MCP_ROUTE) {
       // ปฏิเสธการให้บริการดีกว่าเปิดโล่งเมื่อยังไม่ได้ตั้งรหัส ถ้าไม่มีค่านี้
       // OAuth ก็ออก grant ไม่ได้อยู่ดีเพราะหน้า consent ต้องใช้
-      if (!env.MCP_AUTH_TOKEN) {
+      if (!env.MCP_AUTH_TOKEN && !env.MCP_AUTH_TOKENS) {
         return json(
           {
             error: "server_misconfigured",

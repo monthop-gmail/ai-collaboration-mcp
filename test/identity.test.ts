@@ -11,11 +11,16 @@ vi.mock("agents/mcp/server", () => ({
   getMcpAuthContext: () => authContext.value,
 }));
 
-const { resolveAuthor, readClientNameHeader, staticIdentityFor } =
+const { resolveAuthor, readClientNameHeader, staticIdentityFor, nameForToken } =
   await import("../src/identity");
 
 const config = (name: string) => ({ name, source: "config" as const });
 const header = (name: string) => ({ name, source: "header" as const });
+const fromToken = (name: string) => ({ name, source: "token" as const });
+
+function request(headers: Record<string, string> = {}): Request {
+  return new Request("https://example.com/mcp", { headers });
+}
 
 function withProps(props: unknown) {
   authContext.value = props === undefined ? undefined : { props };
@@ -64,6 +69,78 @@ describe("เส้น static bearer ที่ไม่มี OAuth", () => {
     expect(resolveAuthor(header("Manus"))).toEqual({
       client: "static-header:Manus",
       name: "Manus",
+    });
+  });
+});
+
+/**
+ * เส้น static bearer เดิมรองรับโทเค็นเดียวและชื่อเดียว ทุก client ที่เข้าทางนั้นโดยไม่ส่ง
+ * header จึงได้ป้ายเดียวกันหมด — เจอจริงตอน Codex ต่อเข้ามาแล้วถูกบันทึกเป็น Claude Code
+ */
+describe("ชื่อที่ผูกกับโทเค็นเฉพาะใบ", () => {
+  const TOKENS = "tok-claude=Claude Code,tok-codex=Codex";
+
+  it("โทเค็นที่ตรงได้ชื่อของตัวเอง", async () => {
+    expect(await nameForToken("tok-codex", TOKENS)).toBe("Codex");
+    expect(await nameForToken("tok-claude", TOKENS)).toBe("Claude Code");
+  });
+
+  it("โทเค็นที่ไม่อยู่ในรายการไม่ได้ชื่อ", async () => {
+    expect(await nameForToken("tok-อื่น", TOKENS)).toBeUndefined();
+  });
+
+  it("ไม่ตั้งรายการเลยก็ไม่ได้ชื่อ ไม่ใช่ระเบิด", async () => {
+    expect(await nameForToken("tok-codex", undefined)).toBeUndefined();
+    expect(await nameForToken("tok-codex", "")).toBeUndefined();
+  });
+
+  it("รายการที่รูปแบบผิดถูกข้าม ตัวที่ถูกยังใช้ได้", async () => {
+    expect(await nameForToken("tok-codex", "ไม่มีเท่ากับ,=ไม่มีโทเค็น,tok-codex=Codex,tok-ว่าง=")).toBe(
+      "Codex",
+    );
+  });
+
+  it("ตัดช่องว่างหัวท้ายของทั้งโทเค็นและชื่อ", async () => {
+    expect(await nameForToken("tok-codex", "  tok-codex  =  Codex  ")).toBe("Codex");
+  });
+
+  /**
+   * ชื่อจากโทเค็นเชื่อได้มากกว่าชื่อจาก header เพราะผู้ถือโทเค็นเลือกชื่อเองไม่ได้
+   * ถ้าให้ header ทับได้ ค่าที่เชื่อได้มากกว่าจะถูกค่าที่เชื่อได้น้อยกว่าเขียนทับ
+   */
+  it("ชื่อจากโทเค็นชนะทั้ง header และค่าที่ผู้ดูแลตั้งไว้", () => {
+    const result = staticIdentityFor(
+      request({ "x-client-name": "ปลอมเป็นคนอื่น" }),
+      "Claude Code",
+      "Codex",
+    );
+
+    expect(result).toEqual({ ok: true, identity: fromToken("Codex") });
+  });
+
+  it("ไม่มีชื่อจากโทเค็นก็ถอยไปใช้ header ตามเดิม", () => {
+    const result = staticIdentityFor(request({ "x-client-name": "Manus" }), "Claude Code");
+    expect(result).toEqual({ ok: true, identity: header("Manus") });
+  });
+
+  it("แยกระดับความเชื่อถือไว้ใน client ให้คนอ่านตารางเห็น", () => {
+    withProps(undefined);
+
+    expect(resolveAuthor(fromToken("Codex")).client).toBe("static-token:Codex");
+    expect(resolveAuthor(header("Codex")).client).toBe("static-header:Codex");
+    expect(resolveAuthor(config("Codex")).client).toBe("static-bearer");
+  });
+
+  /**
+   * โทเค็นบอกได้แค่ว่าใครถือใบไหน ไม่ได้บอกว่าคนถือคือใคร ตัวตนที่พิสูจน์ได้จริงมีทาง
+   * เดียวคือ OAuth ซึ่งต้องชนะเสมอแม้ผู้เรียกจะถือโทเค็นที่ผูกชื่ออื่นไว้
+   */
+  it("OAuth ยังชนะชื่อจากโทเค็น", () => {
+    withProps({ clientId: "c-real", clientName: "ChatGPT" });
+
+    expect(resolveAuthor(fromToken("Codex"))).toEqual({
+      client: "c-real",
+      name: "ChatGPT",
     });
   });
 });

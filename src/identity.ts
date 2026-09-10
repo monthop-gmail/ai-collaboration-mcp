@@ -10,18 +10,26 @@
  */
 
 import { getMcpAuthContext } from "agents/mcp/server";
+import { secretsMatch } from "./http";
 
 /**
  * ชื่อของผู้ที่เข้ามาทางเส้น static bearer ซึ่งไม่มี identity จาก OAuth
  *
- * `source` สำคัญกว่าที่เห็น — `config` ผู้ดูแลเซิร์ฟเวอร์เป็นคนตั้ง จึงเชื่อได้เท่า
- * ที่เชื่อผู้ดูแล ส่วน `header` ตัว client ส่งมาเอง **ปลอมได้** ใครถือ token ก็
- * ประกาศตัวเป็นชื่ออะไรก็ได้ ค่านี้จึงถูกเขียนแยกไว้ใน `client` เพื่อให้คนอ่านตาราง
- * แยกออกว่าแถวไหนเชื่อถือได้แค่ไหน
+ * `source` สำคัญกว่าที่เห็น เพราะสามค่านี้เชื่อได้ไม่เท่ากันและถูกเขียนแยกไว้ใน
+ * `client` เพื่อให้คนอ่านตารางย้อนหลังแยกออกว่าแถวไหนเชื่อถือได้แค่ไหน
+ *
+ * - `token`  ผูกกับโทเค็นเฉพาะใบที่ผู้ดูแลออกให้ ผู้เรียกเลือกชื่อเองไม่ได้ แต่โทเค็น
+ *            ส่งต่อกันได้ จึงยังไม่ใช่การพิสูจน์ตัวตน
+ * - `config` ผู้ดูแลตั้งไว้ตัวเดียวสำหรับทุกคนที่เข้าทางนี้ เชื่อได้เท่าที่เชื่อผู้ดูแล
+ *            และแยกไม่ออกว่าเครื่องไหน
+ * - `header` ตัว client ส่งมาเอง **ปลอมได้** ใครถือโทเค็นก็ประกาศตัวเป็นชื่ออะไรก็ได้
+ *
+ * ทั้งสามชั้นนี้ต่ำกว่า OAuth ทั้งหมด ซึ่งตัวตนมาจาก props ที่ฝังในโทเค็นและ client
+ * แก้ไม่ได้
  */
 export interface StaticIdentity {
   name: string;
-  source: "config" | "header";
+  source: "config" | "header" | "token";
 }
 
 export interface Author {
@@ -99,13 +107,42 @@ export function resolveAuthor(
 
   if (!staticIdentity) return { client: "static-bearer", name: "Static bearer" };
 
-  return {
-    client:
-      staticIdentity.source === "header"
-        ? `static-header:${staticIdentity.name}`
-        : "static-bearer",
-    name: staticIdentity.name,
-  };
+  const client =
+    staticIdentity.source === "header"
+      ? `static-header:${staticIdentity.name}`
+      : staticIdentity.source === "token"
+        ? `static-token:${staticIdentity.name}`
+        : "static-bearer";
+
+  return { client, name: staticIdentity.name };
+}
+
+/**
+ * ชื่อที่ผูกไว้กับโทเค็นใบนั้น
+ *
+ * เทียบทีละใบด้วยการเปรียบเทียบแบบเวลาคงที่เหมือนที่ใช้กับโทเค็นหลัก ไม่ใช้ Map
+ * เพราะการค้นด้วยค่าโทเค็นตรง ๆ จะรั่วเวลาที่ใช้ค้นออกไป
+ *
+ * รูปแบบผิดถูกข้ามเงียบ ๆ ได้เพราะเป็นค่าที่ผู้ดูแลตั้งเอง ไม่ใช่ข้อมูลจากผู้เรียก และ
+ * โทเค็นที่ตั้งผิดรูปจะไม่ตรงกับใครอยู่แล้ว จึงตกไปที่เส้นทางเดิมโดยอัตโนมัติ
+ */
+export async function nameForToken(
+  token: string,
+  configured: string | undefined,
+): Promise<string | undefined> {
+  if (!configured) return undefined;
+
+  for (const entry of configured.split(",")) {
+    const separator = entry.indexOf("=");
+    if (separator === -1) continue;
+
+    const candidate = entry.slice(0, separator).trim();
+    const name = entry.slice(separator + 1).trim();
+    if (candidate === "" || name === "") continue;
+
+    if (await secretsMatch(token, candidate)) return name;
+  }
+  return undefined;
 }
 
 /**
@@ -151,11 +188,22 @@ export function readClientNameHeader(request: Request): ClientNameResult {
   return { ok: true, identity: { name: cleaned, source: "header" } };
 }
 
-/** ชื่อที่จะใช้เมื่อไม่ได้มาทาง OAuth — header ที่ client ส่งมา หรือค่าที่ผู้ดูแลตั้งไว้ */
+/**
+ * ชื่อที่จะใช้เมื่อไม่ได้มาทาง OAuth
+ *
+ * ลำดับคือชื่อจากโทเค็น แล้วชื่อจาก header แล้วค่าที่ผู้ดูแลตั้งไว้ตัวเดียว
+ *
+ * ชื่อจากโทเค็นชนะ header เพราะผู้ถือโทเค็นเลือกชื่อเองไม่ได้ ถ้าให้ header ทับได้
+ * ค่าที่เชื่อได้มากกว่าจะถูกค่าที่เชื่อได้น้อยกว่าเขียนทับ ซึ่งเป็นรูปเดียวกับที่ OAuth
+ * ชนะทุกอย่างอยู่แล้ว
+ */
 export function staticIdentityFor(
   request: Request,
   configuredName: string | undefined,
+  tokenName?: string,
 ): ClientNameResult {
+  if (tokenName) return { ok: true, identity: { name: tokenName, source: "token" } };
+
   const fromHeader = readClientNameHeader(request);
   if (!fromHeader.ok) return fromHeader;
   if (fromHeader.identity) return fromHeader;
