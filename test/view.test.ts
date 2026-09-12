@@ -325,3 +325,59 @@ describe("หน้าอ่านอย่างเดียว", () => {
     }
   });
 });
+
+describe("เวลาบนหน้าอ่าน", () => {
+  /**
+   * เวลาที่ข้ามเที่ยงคืนคือจุดที่พลาดแล้วเห็นชัดที่สุด — 18:30 UTC ของวันที่ 2
+   * คือ 01:30 ของวันที่ 3 ตามเวลาไทย ถ้าลืมบวก offset จะผิดทั้งวันและเวลา
+   * ไม่ใช่ผิดแค่ชั่วโมงซึ่งกวาดตาผ่านได้
+   */
+  it("แสดงเวลาไทย ไม่ใช่ UTC และวันเลื่อนตามไปด้วย", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+    await postMessage(env.DB, dis.id, "note", "ข้อความ", chatgpt);
+    await env.DB.prepare("UPDATE messages SET created_at = ?1 WHERE discussion_id = ?2")
+      .bind("2026-01-02T18:30:00.000Z", dis.id)
+      .run();
+
+    const res = await handleView(
+      get(`/view/${dis.id}`, { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain("03/01 01:30");
+    expect(html).not.toContain("02/01 18:30");
+  });
+
+  it("เวลาที่ไม่ข้ามวันก็บวกเจ็ดชั่วโมงเหมือนกัน", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+    await postMessage(env.DB, dis.id, "note", "ข้อความ", chatgpt);
+    await env.DB.prepare("UPDATE messages SET created_at = ?1 WHERE discussion_id = ?2")
+      .bind("2026-06-15T02:05:00.000Z", dis.id)
+      .run();
+
+    const res = await handleView(
+      get(`/view/${dis.id}`, { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+
+    expect(await res!.text()).toContain("15/06 09:05");
+  });
+
+  /**
+   * ตัวเลขเปล่า ๆ บอกเขตเวลาไม่ได้ ถ้าไม่ติดป้ายไว้ คนอ่านจะเดาเอง แล้วครึ่งหนึ่ง
+   * จะเดาว่าเป็น UTC เพราะของเดิมเป็นแบบนั้น
+   */
+  it("ทุกหน้าที่มีเวลา ติดป้ายบอกเขตเวลาไว้", async () => {
+    const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
+
+    const paths = ["/view", `/view/${dis.id}`, "/view/items"];
+    for (const path of paths) {
+      const res = await handleView(
+        get(path, { cookie: `collab_view=${TOKEN}` }),
+        withToken(TOKEN),
+      );
+      expect(await res!.text()).toContain("UTC+7");
+    }
+  });
+});

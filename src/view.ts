@@ -46,14 +46,30 @@ function esc(value: string | null | undefined): string {
     .replaceAll("'", "&#39;");
 }
 
-/** เวลาไทยแบบสั้น ให้คนกวาดตาได้ ไม่ใช่ ISO เต็มที่อ่านยาก */
+/** ระยะห่างจาก UTC ของเวลาไทย — ไทยไม่มี DST ค่านี้จึงคงที่ตลอดปีทุกปี */
+const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+/** บอกท้ายหน้าว่าเวลาที่เห็นเป็นเขตไหน เพราะ `when()` ไม่ได้ติดป้ายไว้ในแต่ละจุด */
+const TZ_NOTE = "เวลาทั้งหมดเป็นเวลาไทย (UTC+7)";
+
+/**
+ * เวลาไทยแบบสั้น ให้คนกวาดตาได้ ไม่ใช่ ISO เต็มที่อ่านยาก
+ *
+ * บวก offset คงที่แล้วอ่านค่าด้วยเมธอด UTC ไม่ใช้เมธอดเวลาท้องถิ่นหรือ `Intl` เพราะ
+ * เวลาท้องถิ่นของ Worker เป็น UTC เสมอไม่ว่าคนอ่านจะอยู่ที่ไหน ค่าที่ได้จึงต้องมาจาก
+ * การคำนวณตรง ๆ ไม่ใช่จากเขตเวลาของเครื่องที่รัน
+ *
+ * ก่อนหน้านี้ฟังก์ชันนี้เขียนกำกับว่าเป็นเวลาไทยอยู่แล้ว แต่อ่านค่า UTC ออกมาตรง ๆ
+ * คนอ่านหน้านี้จึงเห็นเวลาเร็วกว่าจริงเจ็ดชั่วโมงโดยไม่มีอะไรบอก
+ */
 function when(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return esc(iso);
+  const t = new Date(d.getTime() + BANGKOK_OFFSET_MS);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)} ${pad(d.getUTCHours())}:${pad(
-    d.getUTCMinutes(),
+  return `${pad(t.getUTCDate())}/${pad(t.getUTCMonth() + 1)} ${pad(t.getUTCHours())}:${pad(
+    t.getUTCMinutes(),
   )}`;
 }
 
@@ -143,7 +159,7 @@ function renderList(
       (context.has_more
         ? `<div class="note">แสดง ${context.discussions.length} จาก ${context.total_discussions} กระทู้</div>`
         : "") +
-      `<div class="note">หน้านี้อ่านอย่างเดียว การเขียนทุกชนิดยังต้องผ่าน MCP tool เท่านั้น</div>`,
+      `<div class="note">${TZ_NOTE} · หน้านี้อ่านอย่างเดียว การเขียนทุกชนิดยังต้องผ่าน MCP tool เท่านั้น</div>`,
   );
 }
 
@@ -177,7 +193,8 @@ async function renderDiscussion(
       messages +
       (page_.has_more
         ? `<div class="note">แสดง ${page_.messages.length} จาก ${page_.total} ข้อความ</div>`
-        : ""),
+        : "") +
+      `<div class="note">${TZ_NOTE}</div>`,
   );
 }
 
@@ -323,7 +340,7 @@ async function renderItems(
       `<h2 class="section" id="tasks">งาน</h2>` +
       hiddenNote(hidden.tasks, showAll, workspace) +
       (taskRows || empty) +
-      `<div class="note">หน้านี้อ่านอย่างเดียว สถานะของ handoff คำนวณสดจากงานที่มันชี้ไป — ` +
+      `<div class="note">${TZ_NOTE} · หน้านี้อ่านอย่างเดียว สถานะของ handoff คำนวณสดจากงานที่มันชี้ไป — ` +
       `waiting ยังรอคนรับ · stale รอเกินเจ็ดวัน · superseded ถูกแทนด้วยใบใหม่กว่า · ` +
       `obsolete งานปลายทางปิดแล้ว</div>`,
   );
