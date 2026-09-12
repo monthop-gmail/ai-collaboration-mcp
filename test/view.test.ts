@@ -11,6 +11,7 @@ import {
   updateTask,
 } from "../src/db-work";
 import { handleView } from "../src/view";
+import { CONTRACT_VERSION } from "../src/tool-kit";
 import type { Env } from "../src/env";
 
 const chatgpt = { client: "c-chatgpt", name: "ChatGPT" };
@@ -379,5 +380,43 @@ describe("เวลาบนหน้าอ่าน", () => {
       );
       expect(await res!.text()).toContain("UTC+7");
     }
+  });
+});
+
+describe("ป้าย contract บนหน้าอ่าน", () => {
+  /**
+   * เลขนี้เคยเขียนตายตัวเป็น 2 อยู่ในหน้าเว็บ ซึ่งเป็นสำเนาที่ขยับตามต้นทางไม่ได้
+   * หน้าที่ทั้งหมดของเลขนี้คือจับความไม่ตรงกัน สำเนาที่ค้างจึงโกหกใส่คนที่เปิดหน้า
+   * มาไล่หาว่าเลขไม่ตรงกันตรงไหนพอดี เทสต์นี้ผูกสองฝั่งไว้ด้วยกันเพื่อให้พังตอนเทสต์
+   */
+  it("แสดงเลขเดียวกับ CONTRACT_VERSION ไม่ใช่เลขตายตัว", async () => {
+    await createDiscussion(env.DB, WS, "หัวข้อ", chatgpt);
+
+    const res = await handleView(
+      get("/view", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain(`contract ${CONTRACT_VERSION}`);
+    expect(html).not.toContain(`contract ${CONTRACT_VERSION + 1}`);
+    expect(html).not.toContain(`contract ${CONTRACT_VERSION - 1}`);
+  });
+
+  /**
+   * ป้ายนี้กดไม่ได้และเป็นเลขลอย ๆ ที่บอกตัวเองไม่ได้ว่าคืออะไร มีคนถามมาแล้วจริง ๆ
+   * คำอธิบายจึงต้องอยู่ติดกับตัวเลข ไม่ใช่อยู่ใน README ที่คนเปิดหน้าไม่ได้อ่าน
+   */
+  it("ป้าย contract มีคำอธิบายติดไว้ให้เอาเมาส์ชี้", async () => {
+    await createDiscussion(env.DB, WS, "หัวข้อ", chatgpt);
+
+    const res = await handleView(
+      get("/view", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain("<span title=");
+    expect(html).toContain("client ถือ schema เก่าอยู่");
   });
 });

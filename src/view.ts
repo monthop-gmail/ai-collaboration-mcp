@@ -16,6 +16,7 @@
 import { readMessages, readWorkspaceContext, getDiscussion } from "./db";
 import { readDecisions, readHandoffs, readOpenItems, readTasks } from "./db-work";
 import { secretsMatch } from "./http";
+import { CONTRACT_VERSION } from "./tool-kit";
 import type { Env } from "./env";
 import { DEFAULT_WORKSPACE } from "./env";
 
@@ -51,6 +52,17 @@ const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
 
 /** บอกท้ายหน้าว่าเวลาที่เห็นเป็นเขตไหน เพราะ `when()` ไม่ได้ติดป้ายไว้ในแต่ละจุด */
 const TZ_NOTE = "เวลาทั้งหมดเป็นเวลาไทย (UTC+7)";
+
+/**
+ * คำอธิบายของป้าย contract สำหรับคนที่เอาเมาส์ชี้
+ *
+ * ป้ายนี้เป็นเลขลอย ๆ ที่บอกตัวเองไม่ได้ว่าคืออะไร มีคนถามมาแล้วว่ากดไม่ได้แล้วมันคืออะไร
+ * ซึ่งเป็นคำถามที่ถูก — หน้านี้ไม่เคยอธิบายมันเลย ใช้ `title` เพราะเป็น HTML ล้วน
+ * ไม่ต้องมี JavaScript และไม่ต้องมีหน้าใหม่ให้ดูแล
+ */
+const CONTRACT_TITLE =
+  "เลขเวอร์ชันของรูปผลลัพธ์ที่ tool คืน — ถ้าเลขนี้ไม่ตรงกับที่ MCP client ของคุณเห็น " +
+  "แปลว่า client ถือ schema เก่าอยู่ ต้องเชื่อมต่อใหม่";
 
 /**
  * เวลาไทยแบบสั้น ให้คนกวาดตาได้ ไม่ใช่ ISO เต็มที่อ่านยาก
@@ -153,7 +165,7 @@ function renderList(
       `<span><a href="${items}#handoffs"><b>${open.handoffs_pending}</b> handoff รอคนรับ</a></span>` +
       `<span><a href="${items}#handoffs"><b>${open.handoffs_inactive}</b> handoff ตกยุค</a></span>` +
       `<span><a href="${items}#tasks">งานค้าง: ${tasks || "ไม่มี"}</a></span>` +
-      `<span>contract 2</span>` +
+      `<span title="${esc(CONTRACT_TITLE)}">contract ${CONTRACT_VERSION}</span>` +
       `</div>` +
       rows +
       (context.has_more
