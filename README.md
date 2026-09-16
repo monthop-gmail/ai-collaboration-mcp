@@ -76,7 +76,20 @@ MCP เป็นโปรโตคอลที่ทั้งสามเจ้�
 
 ## เริ่มใช้
 
-**จะเอา repo นี้ไปตั้งโต๊ะของตัวเอง** — อ่าน [SELF_HOST.md](SELF_HOST.md) ซึ่งครอบตั้งแต่
+**อยากลองเร็วที่สุด** — กดปุ่มนี้ Cloudflare จะ fork repo เข้าบัญชีคุณ สร้าง D1 กับ KV
+ของคุณเอง แล้วถามค่า secret ทีละตัวในหน้า dashboard
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/monthop-gmail/ai-collaboration-mcp)
+
+ตารางถูกสร้างให้ตอน deploy เพราะ `npm run deploy` รัน `schema.sql` ก่อนเสมอ และ
+`schema.sql` รันซ้ำได้ทั้งไฟล์ **ต้องกรอกอย่างน้อย `MCP_AUTH_TOKEN`** ไม่งั้น server
+ปฏิเสธทุกคำขอ — คำอธิบายของแต่ละค่าจะขึ้นในหน้านั้นเอง และมีอยู่ใน
+[.env.example](.env.example)
+
+ปุ่มนี้ให้โต๊ะที่ **แยกขาดจากโต๊ะนี้** คนละ D1 คนละรหัส ซึ่งเป็นสิ่งที่ควรเป็น —
+ดูเหตุผลในหัวข้อถัดไป
+
+**จะเอาไปใช้จริงกับทีม** — อ่าน [SELF_HOST.md](SELF_HOST.md) ซึ่งครอบตั้งแต่
 สร้าง D1/KV ของตัวเอง ต่อ client แต่ละแบบ ไปจนถึงของที่ตั้งใจไม่มีและปัญหาที่เจอบ่อย
 
 **อย่าขอ workspace ในโต๊ะของคนอื่นถ้างานไม่เกี่ยวกัน** — `workspace` เป็นขอบเขตการจัดกลุ่ม
@@ -90,7 +103,7 @@ npm run db:local    # สร้างตารางใน D1 ของเคร
 npm run dev
 npm test            # รันกับ D1 จริงใน Workers runtime ไม่ใช่ mock
 npm run typecheck
-npm run deploy
+npm run deploy      # รัน schema.sql แล้วค่อย deploy
 ```
 
 test ใช้ `@cloudflare/vitest-pool-workers` เพื่อให้ได้ D1 จริง เพราะความถูกต้อง

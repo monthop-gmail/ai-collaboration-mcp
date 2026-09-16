@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { CONTRACT_VERSION, handoffReminder, registerTool } from "../src/tool-kit";
+import { CONTRACT_VERSION, handoffReminder, registerTool, run } from "../src/tool-kit";
 
 /**
  * ข้อความนี้คือสิ่งเดียวที่กัน agent เล่าว่า "ส่งต่อแล้ว" ทั้งที่แค่ตั้งผู้รับผิดชอบ
@@ -68,5 +68,31 @@ describe("ประกาศเลข contract ให้ทุก tool", () => {
 
   it("เลข contract เป็นจำนวนเต็ม ไม่ใช่ semver", () => {
     expect(Number.isInteger(CONTRACT_VERSION)).toBe(true);
+  });
+});
+
+describe("ตารางยังไม่ถูกสร้าง", () => {
+  /**
+   * `no such table` เป็นข้อความดิบของ D1 ที่บอกไม่ได้ว่าต้องทำอะไรต่อ คนที่เพิ่ง
+   * deploy ครั้งแรกแล้ว schema ยังไม่ขึ้นจะนึกว่าโค้ดพัง ทั้งที่เหลืออีกคำสั่งเดียว
+   */
+  it("แปลข้อความดิบของ D1 เป็นคำสั่งที่รันได้", async () => {
+    const result = (await run(async () => {
+      throw new Error("D1_ERROR: no such table: messages");
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("npm run db:remote");
+    expect(result.content[0]!.text).toContain("รันซ้ำได้");
+  });
+
+  it("ข้อผิดพลาดอื่นไม่ถูกแปลเป็นเรื่อง schema", async () => {
+    const result = (await run(async () => {
+      throw new Error("something else entirely");
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("something else entirely");
+    expect(result.content[0]!.text).not.toContain("db:remote");
   });
 });

@@ -110,11 +110,40 @@ export function formatError(error: unknown) {
   };
 }
 
+/**
+ * ข้อความที่ D1 คืนเมื่อยังไม่ได้สร้างตาราง
+ *
+ * เจอได้กับ deployment ใหม่ที่ขึ้น Worker แล้วแต่ยังไม่ได้รัน `schema.sql` เช่นตอน
+ * `npm run db:remote` ล้มแล้วคนไม่ทันสังเกต ข้อความดิบของ D1 คือ `no such table: xxx`
+ * ซึ่งบอกไม่ได้เลยว่าต้องทำอะไรต่อ คนที่เพิ่ง deploy ครั้งแรกจะนึกว่าโค้ดพัง
+ *
+ * แปลเป็นคำสั่งที่รันได้ตรง ๆ แทน ด้วยเหตุผลเดียวกับที่ `/mcp` บอกวิธีตั้ง
+ * `MCP_AUTH_TOKEN` เมื่อยังไม่ได้ตั้ง — ล้มเหลวแบบมีเสียงและบอกทางออก
+ */
+const NO_TABLE = /no such table/i;
+
+/** ยังไม่ได้สร้างตารางหรือไม่ — ดูจากข้อความของ D1 เพราะไม่มีรหัสข้อผิดพลาดให้จับ */
+function schemaMissing(error: unknown): boolean {
+  return error instanceof Error && NO_TABLE.test(error.message);
+}
+
 export async function run(fn: () => Promise<unknown>) {
   try {
     return formatResult(await fn());
   } catch (error) {
     if (error instanceof RequestError) return formatError(error);
+
+    if (schemaMissing(error)) {
+      console.error("schema not applied", error);
+      return formatError(
+        new Error(
+          "ฐานข้อมูลยังไม่มีตาราง — Worker ขึ้นแล้วแต่ยังไม่ได้รัน schema " +
+            "สั่ง `npm run db:remote` (เท่ากับ `wrangler d1 execute DB --remote --file schema.sql`) " +
+            "แล้วเรียกใหม่ · คำสั่งนี้รันซ้ำได้ ไม่ลบข้อมูลเดิม",
+        ),
+      );
+    }
+
     // ข้อผิดพลาดที่ไม่ได้เกิดจากคำขอ ต้องเห็นใน log ไม่ใช่กลืนหาย
     console.error("tool failed", error);
     return formatError(error);

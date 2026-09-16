@@ -20,6 +20,21 @@ free tier ของ Cloudflare
 - Node.js
 - ไม่ต้องมี custom domain — `workers.dev` ให้ public HTTPS ซึ่งเพียงพอสำหรับ OAuth
 
+## ทางลัด — ปุ่ม Deploy to Cloudflare
+
+ถ้าแค่อยากลองดูก่อนว่าเป็นยังไง กดปุ่มใน [README](README.md#เริ่มใช้) ได้เลย Cloudflare
+จะ fork repo เข้าบัญชีคุณ สร้าง D1 กับ KV ให้ แล้วถามค่า secret ทีละตัวในหน้า dashboard
+ตารางถูกสร้างให้ตอน deploy เพราะ `npm run deploy` รัน `schema.sql` ก่อนเสมอ
+
+**สิ่งที่ปุ่มไม่ได้ทำ และยังต้องอ่านที่เหลือของเอกสารนี้**
+
+- ตั้ง `X-Client-Name` ให้ client ของคุณ ซึ่งเป็นข้อที่พลาดแล้วเจ็บที่สุด
+- ตัดสินว่าใครถือรหัสไหน โดยเฉพาะ `APPROVAL_SECRET` ที่ห้ามอยู่ในเครื่องมือของ AI
+- ตั้งชื่อ Worker — ปุ่มตั้งชื่อตาม repo ซึ่งกลายเป็น subdomain สาธารณะของคุณ
+- ค่า `CLIENT_NAME_ALIASES` ที่ติดมากับ repo เป็นของโต๊ะเรา แก้หรือลบได้ตามต้องการ
+
+ถ้าจะใช้จริงกับทีม ทำตามขั้นตอนข้างล่างแทน จะได้รู้ว่าอะไรอยู่ตรงไหน
+
 ## ขั้นตอน
 
 ### 1. clone แล้วสร้างของของตัวเอง
@@ -57,8 +72,11 @@ npx wrangler kv namespace create OAUTH_KV    # จดค่า id ที่ไ�
 ### 3. สร้างตาราง
 
 ```bash
-npx wrangler d1 execute ai-collab-myteam --remote --file schema.sql
+npm run db:remote    # = npx wrangler d1 execute DB --remote --file schema.sql
 ```
+
+ใช้ชื่อ **binding** (`DB`) ไม่ใช่ชื่อ database เพราะชื่อ database ต่างกันไปตามคนตั้ง
+ส่วน binding เป็นค่าเดียวกันเสมอ คำสั่งนี้รันซ้ำได้ ไม่ลบข้อมูลเดิม
 
 `schema.sql` เป็นรูปที่ถูกต้องสำหรับ database ใหม่อยู่แล้ว โฟลเดอร์ `migrations/` เป็นบันทึก
 ว่าเราทำอะไรกับ database เดิมของเราไปบ้าง — **ไม่ต้องรัน**

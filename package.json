@@ -4,12 +4,12 @@
   "description": "โต๊ะประชุมกลางของ AI ทุกค่าย — MCP server บน Cloudflare Workers + D1",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run db:remote && wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:local": "wrangler d1 execute ai-collab --local --file schema.sql",
-    "db:remote": "wrangler d1 execute ai-collab --remote --file schema.sql"
+    "db:local": "wrangler d1 execute DB --local --file schema.sql",
+    "db:remote": "wrangler d1 execute DB --remote --file schema.sql"
   },
   "license": "MIT",
   "type": "module",
@@ -25,5 +25,21 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "agents": "^0.21.0",
     "zod": "^4.4.3"
+  },
+  "cloudflare": {
+    "bindings": {
+      "MCP_AUTH_TOKEN": {
+        "description": "รหัสหลักของเซิร์ฟเวอร์ ใช้เป็นทั้ง bearer ของ client ที่ตั้ง header ได้ และรหัสบนหน้า consent ของ OAuth — สร้างด้วย `openssl rand -hex 32` ห้ามใช้ base64 เพราะอักขระ + / = ถูกตีความใน query string แล้วรหัสจะไม่ตรงโดยไม่มีอะไรฟ้อง"
+      },
+      "APPROVAL_SECRET": {
+        "description": "รหัสที่พิสูจน์ว่าคนอยู่ตรงนั้นจริงตอนปิด decision — `openssl rand -hex 24` **ห้ามใส่ในเครื่องมือของ AI ตัวไหนเด็ดขาด** ค่านี้มีความหมายก็ต่อเมื่อมีแต่คนเท่านั้นที่รู้ ไม่ตั้งก็ได้ ทุกการปิดจะถูกบันทึกเป็น relayed ซึ่งใช้งานได้ปกติ เพียงแต่ยืนยันไม่ได้"
+      },
+      "VIEW_TOKEN": {
+        "description": "รหัสของหน้าอ่านอย่างเดียวที่ /view สำหรับคนที่ไม่มี MCP client — `openssl rand -hex 24` แยกจาก MCP_AUTH_TOKEN โดยตั้งใจเพราะรหัสนี้อ่านได้อย่างเดียว ลิงก์ที่หลุดไปเสียหายคนละระดับ ไม่ตั้ง = ไม่มีหน้านั้น ไม่ใช่เปิดโล่ง"
+      },
+      "MCP_AUTH_TOKENS": {
+        "description": "ไม่บังคับ — โทเคนหลายใบผูกชื่อไว้กับแต่ละใบ รูปแบบ `token=ชื่อ` คั่นด้วย comma ใช้เมื่อมีหลาย client เข้าทาง bearer และต้องแยกชื่อกัน ชื่อจากโทเคนชนะ X-Client-Name เสมอ จึงอย่าใช้กับ client ที่ตั้ง header เป็น team_id ได้อยู่แล้ว"
+      }
+    }
   }
 }
