@@ -7,6 +7,7 @@ import { json, secretsMatch } from "./http";
 import { handleView } from "./view";
 import { nameForToken, staticIdentityFor, type StaticIdentity } from "./identity";
 import { withReadOnlyGuard } from "./readonly";
+import { createAdapter, type Jwks } from "./jwt";
 import type { Env } from "./env";
 
 const MCP_ROUTE = "/mcp";
@@ -89,7 +90,15 @@ async function serveMcp(
   env: OAuthEnv,
   ctx: ExecutionContext,
   readOnly: boolean,
+  resolved?: StaticIdentity,
 ): Promise<Response> {
+    // ตัวตนที่ตัดสินมาแล้วชนะทุกอย่าง และทำให้ไม่ต้องอ่าน `X-Client-Name` เลย
+    //
+    // ข้อนี้คือเงื่อนไข "spoofed X-Client-Name ไม่มีผลต่อ actor" ของใบงาน — ไม่ได้
+    // ทำด้วยการเทียบแล้วทิ้ง แต่ด้วยการไม่เคยอ่านมันบนเส้นทางนั้น การเทียบแล้วทิ้ง
+    // ยังเปิดช่องให้ใครสลับลำดับทีหลังแล้วมันกลับมามีผล
+    if (resolved) return getHandler(env, resolved, readOnly)(request, env, ctx);
+
     // คำนวณชื่อสำรองให้ทุกคำขอ ไม่ต้องแยกว่ามาทางไหน เพราะ `resolveAuthor` ให้
     // ตัวตนจาก OAuth ชนะเสมอเมื่อมี — ชื่อจาก header หรือจากโทเค็นจึงมีผลเฉพาะ
     // เส้น static bearer ส่วนคำขอที่มาทาง OAuth ถือโทเค็นคนละใบอยู่แล้วจึงไม่ตรง
@@ -133,6 +142,7 @@ async function servePilotRoute(
   request: Request,
   env: OAuthEnv,
   ctx: ExecutionContext,
+  auth: ReadOnlyAuth & { ok: true },
 ): Promise<Response> {
   let method: string | undefined;
   let tool: string | undefined;
@@ -148,17 +158,21 @@ async function servePilotRoute(
   }
 
   const started = Date.now();
-  const response = await serveMcp(request, env, ctx, true);
+  const response = await serveMcp(request, env, ctx, true, auth.identity);
 
   if (method === "tools/call" || method === "tools/list") {
     console.log(
       JSON.stringify({
         at: new Date().toISOString(),
         event: "pilot_call",
+        // ชั้นของตัวเอง ไม่ใช่ของ gateway — ฝั่งนั้นลงของฝั่งนั้นเอง และค่าสองชั้น
+        // ที่ขัดกันถูกได้ทั้งคู่
+        layer: "upstream",
         method,
         tool,
         status: response.status,
         ms: Date.now() - started,
+        ...auditActor(auth),
       }),
     );
   }
@@ -166,13 +180,76 @@ async function servePilotRoute(
 }
 
 /**
- * รหัสของเส้นอ่านอย่างเดียว อยู่คนละรายการกับรหัสปกติโดยตั้งใจ ใบที่อยู่ในรายการนี้
- * เข้าเส้นปกติไม่ได้ และใบของเส้นปกติก็เข้าเส้นนี้ไม่ได้
+ * ตัวตนในบันทึก คำนวณจากของที่ฝั่งนี้ตรวจเอง ห้ามสืบทอดจาก gateway
+ *
+ * เหตุผลที่ห้ามสืบทอด — record ที่คัดลอกคำแถลงของชั้นอื่นมาแล้วอ้างเป็นของตัวเอง
+ * คือ audit ที่โกหกโดยไม่มีใครตั้งใจ (agent-platform, dis-514ae7a7 seq 16)
+ *
+ * `static_readonly_token` ลง `actor: null` เพราะรหัสบอกได้ว่าใบไหนเข้ามา บอกไม่ได้
+ * ว่าใครถือ — โทเคนส่งต่อกันได้ ส่วน `gateway_jwt_rs256` ลงชื่อได้เพราะ `sub` ผ่าน
+ * การตรวจลายเซ็นแล้วและผู้ถือแก้ไม่ได้
  */
-async function hasReadOnlyBearer(request: Request, env: Env): Promise<boolean> {
+function auditActor(auth: ReadOnlyAuth & { ok: true }) {
+  const byJwt = auth.identity.source === "jwt";
+  return {
+    actor: byJwt ? `jwt:${auth.identity.name}` : null,
+    actor_resolved: byJwt,
+    authn_method: byJwt ? "gateway_jwt_rs256" : "static_readonly_token",
+  };
+}
+
+type ReadOnlyAuth =
+  | { ok: true; identity: StaticIdentity }
+  | { ok: false; reason: string };
+
+/** โทเคนที่มีสามส่วนคั่นด้วยจุด ถือว่าผู้เรียกตั้งใจส่ง JWT ไม่ใช่รหัสร่วม */
+const looksLikeJwt = (token: string) => token.split(".").length === 3;
+
+/**
+ * upstream adapter ของเส้นนี้ ประกอบจาก env สามค่า ขาดตัวใดตัวหนึ่งคือปิดเส้น JWT
+ *
+ * ไม่ cache instance เพราะ `createAdapter` ไม่มีของหนักและ Worker สร้าง env ใหม่
+ * ต่อคำขออยู่แล้ว — การ cache ข้าม env คือรูปเดียวกับ handler cache ที่เคยรั่วข้ามเส้น
+ */
+function gatewayAdapter(env: Env) {
+  const { GATEWAY_JWT_ISSUER: issuer, GATEWAY_JWT_AUDIENCE: audience, GATEWAY_JWKS } = env;
+  if (!issuer || !audience || !GATEWAY_JWKS) return undefined;
+  let jwks: Jwks;
+  try {
+    jwks = JSON.parse(GATEWAY_JWKS) as Jwks;
+  } catch {
+    return undefined;
+  }
+  // ไม่เก็บ `jti` เพราะ Worker มี isolate หลายตัว ต่างคนต่างเก็บแล้วตายเมื่อไรก็ได้
+  return createAdapter({ issuer, audience, getJwks: () => jwks, trackJti: false });
+}
+
+/**
+ * รหัสของเส้นอ่านอย่างเดียว สองทางที่แยกกันเด็ดขาด
+ *
+ * ทาง JWT เป็นของที่เพิ่มเข้ามา ทาง static bearer เดิมยังอยู่เป็น compatibility path
+ * ใบในรายการนี้เข้าเส้นปกติไม่ได้ และใบของเส้นปกติก็เข้าเส้นนี้ไม่ได้
+ *
+ * โทเคนที่เป็นรูป JWT จะไม่ตกไปลองทาง static เมื่อตรวจไม่ผ่าน เพราะผู้เรียกตั้งใจ
+ * ส่ง JWT อยู่แล้ว การตกไปทางอื่นจะบังรหัสเหตุผลที่ฝั่ง gateway ต้องใช้ตรวจข้ามระบบ
+ */
+async function authorizeReadOnly(request: Request, env: Env): Promise<ReadOnlyAuth> {
   const token = bearerToken(request);
-  if (!token) return false;
-  return Boolean(await nameForToken(token, env.MCP_READONLY_TOKENS));
+  if (!token) return { ok: false, reason: "missing_token" };
+
+  const adapter = gatewayAdapter(env);
+  if (adapter && looksLikeJwt(token)) {
+    // operation ของรอบนี้เป็น `read` เสมอ เพราะเส้นนี้ไม่มี tool ที่เขียนได้เลย
+    const verified = await adapter.verify(token, { operation: "read" });
+    return verified.ok
+      ? { ok: true, identity: { name: verified.principal.sub, source: "jwt" } }
+      : { ok: false, reason: verified.reason };
+  }
+
+  const name = await nameForToken(token, env.MCP_READONLY_TOKENS);
+  return name
+    ? { ok: true, identity: { name, source: "token" } }
+    : { ok: false, reason: "unknown_token" };
 }
 
 async function hasStaticBearer(request: Request, env: Env): Promise<boolean> {
@@ -231,14 +308,15 @@ export default {
     if (pathname === MCP_READONLY_ROUTE) {
       // เส้นนี้ไม่ผูกกับ OAuth provider จึงต้องตอบ 401 เองเมื่อรหัสไม่ผ่าน แทนที่จะ
       // ตกไปให้ provider ซึ่งจะพาไปหา flow ของเส้นปกติ
-      if (await hasReadOnlyBearer(request, env)) {
-        return servePilotRoute(request, env, ctx);
-      }
-      return json(
-        { error: "unauthorized", detail: "read-only route requires a token from MCP_READONLY_TOKENS" },
-        401,
-        { "WWW-Authenticate": 'Bearer realm="ai-collaboration read-only"' },
-      );
+      const auth = await authorizeReadOnly(request, env);
+      if (auth.ok) return servePilotRoute(request, env, ctx, auth);
+
+      // คืนรหัสเหตุผลจากชุดปิด ไม่ใช่ข้อความอิสระ เพราะฝั่ง gateway ใช้ค่านี้ตรวจ
+      // ข้ามระบบและนับในตารางบันทึก — รหัสพวกนี้ไม่ใช่ความลับและบอกเฉพาะว่าโทเคน
+      // ตกด่านไหน ไม่ได้บอกว่าโทเคนที่ถูกควรเป็นอย่างไร
+      return json({ error: "unauthorized", reason: auth.reason }, 401, {
+        "WWW-Authenticate": 'Bearer realm="ai-collaboration read-only"',
+      });
     }
 
     // ที่เหลือเป็นของ provider — endpoint ของ OAuth, discovery metadata, หน้า

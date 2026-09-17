@@ -1,0 +1,243 @@
+{
+  "note": "ชุดทดสอบสำหรับ upstream adapter — มีแต่กุญแจสาธารณะ ไม่มีความลับ",
+  "issuer": "https://gw.example.internal/mcp",
+  "audience": "mcp://gw.example.internal/connector/collab-readonly-test",
+  "connector_id": "collab-readonly-test",
+  "generated_by": "conformance/make-vectors.js",
+  "vectors": [
+    {
+      "id": "valid_read",
+      "why": "โทเคนถูกต้องทุกข้อ operation ตรงกับ ops",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiI1ZjBkNTY2YS0yMWZkLTQyOTQtYjQ4Yy1kMjNlYWQzYWQ2ZWIiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6ImY2MTVjYjE5LTAzZWEtNGQ0ZS05NmUwLTg1MjEzODY5M2MyMCJ9.aNsGZFR-C1pXFr6RionJIinWg3PjCI4Dl9_FCpgkV337EvJBgUuNXmcueV3dqZO3R0UVbgBCS8K-gXGkL-CHsLUN0elHXdnMF1eudNLRRKeISN0e8_Wq6hjgQO1iAEAZWr9qCrGzBkBQAUrwhjSRFxToNNqup1G1bbyFeDIA99-z_YL0_GOWcBOngKHZXun43MN3MfI7k65kWwaCNaVW9x7YX-oNw5NgJjalRj6NICcURM3Bvy8kM7KRpGMFjlXe4LzquHlNRySlq1rx6VDxr75449R7w8wIn_SOA-Hx3Uw3IhaFilwqL63oAoSRk8dvSsR0b3i0__0RTbsAmqjTuA",
+      "operation": "read",
+      "expect": {
+        "ok": true,
+        "sub": "oidc:conformance-subject"
+      }
+    },
+    {
+      "id": "valid_write_with_write_ops",
+      "why": "ops มี write และเรียก write",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiIyNDM3NTQyMS0zODRjLTQ1MTktYThjNS0zMjFjMDk4YWUwZjkiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIiwid3JpdGUiXSwiY29yIjoiODM4YTk0OTItN2JiNC00ZDI4LWJmMjItNDkyOWE1NDlmN2QwIn0.IHf8bIugzF3RSNKH1OHYWhX39MTVsB7VfcP_FOxL9Q0cy0ZDPMlRKJ2BEvYuKG-PEnm20J1s47y__UOORyToDWZzyFW_m3V147IKvyctF4rWKmYmudYOioABii92cU2np3Ankn8zTAli2EFMFTsT7GgBnvS7NQqfLqaRMxtqnUYhcH0Gm5eBR9T3AIUHkM3xqcVIKnxQWNgrkm9dK7gblFEgT3hFFJoa6dDKrL8VCo0AyvYxvK4UcV7f6z3VV9wc4yrM0hOJABeUXl94qQCDlAAyHWcOEbiTn9yTPfeu-kuRBFESKcv71HdpoAx77Nne9f1O5sRqcmPlnDA6JjgvZA",
+      "operation": "write",
+      "expect": {
+        "ok": true,
+        "sub": "oidc:conformance-subject"
+      }
+    },
+    {
+      "id": "ops_insufficient",
+      "why": "โทเคนเขียนว่า read แต่เรียก operation ที่เป็น write — ข้อ 6 ของลำดับ",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiI4YzRjOGQ0Ni1kMzc4LTQ2NjYtYTM4Ni02YWE4OTAxYjI1NzYiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6Ijk1OTQzODk0LWNiYzgtNDNlNy1hZDNmLThlOTJiNjhjMzllOSJ9.JQCQumQvHoBHQLWzPMepeE2WETSF3WFdzCbYgfQMBJuQAluy2GtXtqHRyRO9DV8Kok6RRrpFDvc2b44jm-HfZAeMA-TWrdZ9eeuF_9KurwkgE6EsLQd4UqlIRd3YtxNLIpiDgSJuMrmY43zq-4itR-RhqyBT4RG15ko6irs1PU_QjTwevy9UKH1o8XURdguafdZYRy5ZXXCoK9YTQSHvlhPwGmx1z-ISE_E8NFvaylDt6obDG6zh-MBCteHKj9ysRPl5OfcwOkDlz05MHQBMso60MRoPU3NDmsG4a9m5BYbBfGfM7KhYBlbks_m2PfmfCw68YTIFfklTvWXxLqZ3Vg",
+      "operation": "write",
+      "expect": {
+        "ok": false,
+        "reason": "ops_not_permitted"
+      }
+    },
+    {
+      "id": "audience_mismatch",
+      "why": "aud ชี้ connector อื่น — ต้องไม่ผ่านแม้ออกโดย issuer เดียวกัน",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3Ivb3RoZXItY29ubmVjdG9yIiwiaWF0IjoxNzg5MDAwMDAwLCJuYmYiOjE3ODkwMDAwMDAsImV4cCI6NDEwMjQ0NDgwMCwianRpIjoiNDMzNTdhODAtNDRiOC00NmFiLWJhNDctOWQwN2E0YjAwZjkyIiwiY2lkIjoiY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJzaWQiOiJjbG91ZCIsImVudiI6InRlc3QiLCJ0ZWFtIjoibW9udGhvcC1nbWFpbC9leGFtcGxlIiwicm9sZXMiOlsibWNwLXJlYWRlciJdLCJvcHMiOlsicmVhZCJdLCJjb3IiOiIxMGJjNGVjNi0wNTVhLTRmM2YtYmIwZS0zNDgyNTUxMWE1MzEifQ.h-raBEwQ5j-HfJVxLz7vHjPlgrbDZ4m2ghpf9K_8gXS7RAiOKVjHHPR-IkC9bVdmbN6LGTFu5sr5SPzFVbiymXR-hNxBgNjGt_K8XsVNqcjOf_Ja84zNQnm8TIw8bU6EA26wGxs57CVPJbc6Y741ZokG8qQgiREhgx35TfDAw9jxCjFv6oIQGPZBAvKgT90_8dgkFaXtpOI7vMV2rTvim23-A0RssikEgsh7G_U2M6KiIsCuFI2FZIHez8MFX0t1Tz_ZFf4_blFfaz6fo9y1nwaN4ER-s1HwV-Wu9pZy1s13ZpRppsrCxXnSuDT23p0SVSOWcxBkpPBbbELvDOr4IA",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "audience_mismatch"
+      }
+    },
+    {
+      "id": "audience_tenant_wide",
+      "why": "aud กว้างระดับ tenant — รูปที่ทำให้ PoC รอบก่อนตัน ห้ามยอมรับ",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbCIsImlhdCI6MTc4OTAwMDAwMCwibmJmIjoxNzg5MDAwMDAwLCJleHAiOjQxMDI0NDQ4MDAsImp0aSI6ImE2MDAwM2Y3LWQ4MTctNGY5ZC1iNDI3LTc2MzkyMWQ2YWI5NSIsImNpZCI6ImNvbGxhYi1yZWFkb25seS10ZXN0Iiwic2lkIjoiY2xvdWQiLCJlbnYiOiJ0ZXN0IiwidGVhbSI6Im1vbnRob3AtZ21haWwvZXhhbXBsZSIsInJvbGVzIjpbIm1jcC1yZWFkZXIiXSwib3BzIjpbInJlYWQiXSwiY29yIjoiNjczMWQzYzctMGJmNy00OGUxLWIzYTEtZThlOTZjNGI0Yzk1In0.payKNR2V0Da5YyoCe7U1u9X4tUIJVhB69vcQRLqS8nRJqTgVCaWUHt1i7AUhfxPMKO2cUUZE4OaAFD-iJ4rv8vNNg1j2hh8_qbaIIu4G9iF3Fg6YmC8VYJXjo7lgYSEb3UtNUC-Ohw5ehUYKOu3O103T62hUnavCWlG3BGj519coKwfRR7k00zeS65QhKJv-FBrVkRI1mI1qmHYEzxw-PVXSKro_k_1SkxFWJmCEAzsn12RFiulSuBEN5Tm1Ct9bmJGXnBflfLqVbuY60_86lVOqxYOpVjlbhDKd4ADhHjlle8Vel0-zCNy3zkXi-5jDj4sJpgzzBj0-wroZhbI4Dg",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "audience_mismatch"
+      }
+    },
+    {
+      "id": "audience_array_contains_valid",
+      "why": "aud เป็น array ที่มีค่าที่ถูกอยู่ด้วย พร้อม audience ระดับ tenant ซ่อนในรายการเดียวกัน — ไลบรารีมาตรฐานจะยอมรับ เราต้องปฏิเสธ",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjpbIm1jcDovL2d3LmV4YW1wbGUuaW50ZXJuYWwvY29ubmVjdG9yL2NvbGxhYi1yZWFkb25seS10ZXN0IiwibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC90ZW5hbnQvZXhhbXBsZSJdLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiI2ZjUzNGNlNC0xYmM1LTQwNjYtODMzZS04ZmFjOGFiNmM3ZjIiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjAyYmIzZDFmLTllMzMtNDhlYi1iNjYzLTAxNzdkMDE0NjQ4ZCJ9.Qn35HvlIR0e24-GeixRsvpOOd42Zi-jLUShQll3IYEID47eWo8VYWDA7oiBVlnpk4ZhAhfJCoo84ztgpJ3lTO1noZqKGpQ8NSr5j2h7lvNACh3nMqdmbVboTVkPBRKwQxEekTrvR9bXJXpZ3aDdzhfYvanir32iCcPxmYKHyCHsDFJQvBIt6SRmn0DNCHg374XZbm4IASR71rSmWRJHKQHj4VXBO4Jj27P0en8wMKDtA_EEbbp3bwjQZhRcClgwykF2QexSLhbnT7TZJYQWZMj7gFwgFBJ1qsHUSlriyupHqzfQWj-EtgUM-7K2vWHrWHC7zPKCjciZdDOqM7dJeXw",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "audience_mismatch"
+      }
+    },
+    {
+      "id": "cid_mismatch",
+      "why": "aud ถูกแต่ cid ชี้ connector อื่น — สัญญาบอกว่าเทียบสองทาง ถ้าไม่ตรวจก็ไม่จริง",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiIxYjk0ODFlZS02ZmUzLTQ5ZjUtODMzOC1lYzg3NzBhYWI0OWEiLCJjaWQiOiJvdGhlci1jb25uZWN0b3IiLCJzaWQiOiJjbG91ZCIsImVudiI6InRlc3QiLCJ0ZWFtIjoibW9udGhvcC1nbWFpbC9leGFtcGxlIiwicm9sZXMiOlsibWNwLXJlYWRlciJdLCJvcHMiOlsicmVhZCJdLCJjb3IiOiI1MTAxYTZhMi1mMjYwLTQwNWMtOGQ5ZC05ZGNmZDkwZjExZmYifQ.qh0D5l9nlwSUJZkHsQgpSO_ju-BV8tlmhTjGH0oWWYXucuVaHoDYaCY05yT5UPxvR6l_WYJnif9GLm5mT3cBmBYJu8CrcM6l0CauVa0QJyKszrvxczvUZ9At35gyfgAxaUAb54Hcsx4P8yKwT1u8Y23qadyoBRWnqouvU0s2iBRCLvL3gIKv9M-WR1Y9GOLHHIpZiT2JqGsNsCo8PKxTKD5eoUBDeDZK59hzQDC0uUl2GtHNi1EWNBexpoaUzk5VL0TM3g3drl2RLrCzcr7osZfpVXw8oVqyeee-2WdFmAFdOX-MsTJLqjzegTu11SlsCZmos5Xnk29qozEG5eJrYA",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "connector_mismatch"
+      }
+    },
+    {
+      "id": "missing_sub",
+      "why": "ไม่มี sub — adapter ที่หลวมจะ map undefined เป็นค่าอะไรสักอย่าง กลายเป็น shared identity",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiI0YWY4YzkyMy0zMzliLTQ3NjUtOGJmNy0wNGM4M2MxN2Y2ZDgiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6ImNkYzI2YmFkLTNmNjAtNGNjOC04YWJmLWFjZWRmYTQ2NzdkNCJ9.F6bq5JD3T2wYjGNSjlgZHvqd-ddl8-vbk-957v5ZIXOInsXuOWQKlgWdiEOGdHsf9u0OsQBAWarm3mz86epsGdFVFqGsTR5nLHYbYP-7Ok9jiWrJdrsm9tCQOXTGucMAeglS1TS95aiZOMqcAI2x5HjJTSAnD3leaTS8HR3auxRY4E02swIpReVvk51jzphScLPNVrjwPJYhztXjWMNDEOZQ3G5TmJv4q1BEEsd0JaYy5sF4fXVntePYUffd-gn9_cLhOqSLciRjK_SLu43EC8lwk5IxQy6xnYg-b60Wiyfz35dmYlcy6ZozstpdkdC1X2U-hQ6X9rQYlqD4O9eI-A",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "subject_missing"
+      }
+    },
+    {
+      "id": "empty_sub",
+      "why": "sub เป็นสตริงว่าง",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoiICAgIiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiIyOTkwNmU2MS1jYWZlLTQwOWEtYjg2ZS04YzE2YWRmMmM0YmIiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjQwYTIxODIwLTZlZGQtNGExNi04OGNlLWZkYTQ2NWViNTAwMiJ9.nyjsQdOvJ8VwpNfBNK1ZiyFD35YiARMCotFvpNtXOB8N7CbmuGppq1pxdnPiaTFUsx5VB_wCMn58KMIqAGNQ0rMWmVAJnGp8Z3ETGjqs--MivKCjv2T-E7uFyscmfB5mK05lpZhDUgxIuE2ZrAFKIFh-x0icwJoKFmCoRNYUsR4EfPE2W1v2RYKV2cqBOMo8AMR4UPdPsCYh2ZpR_dPeYLcuh6fx1exRvlglbO8sMid4-1emap_Gz4cmjH6Ls8CodbDAUS8sHYRCoZeYl8wXgEw_mxsejvQ1P1iz3Y6uJNp7FYm5myoeVjVOeEN8Sa6bgsLqL2MvbpTzsaD9eiriwA",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "subject_missing"
+      }
+    },
+    {
+      "id": "issuer_mismatch",
+      "why": "ออกโดย issuer ที่เราไม่ยอมรับ",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL3NvbWVvbmUtZWxzZS5leGFtcGxlL21jcCIsInN1YiI6Im9pZGM6Y29uZm9ybWFuY2Utc3ViamVjdCIsImF1ZCI6Im1jcDovL2d3LmV4YW1wbGUuaW50ZXJuYWwvY29ubmVjdG9yL2NvbGxhYi1yZWFkb25seS10ZXN0IiwiaWF0IjoxNzg5MDAwMDAwLCJuYmYiOjE3ODkwMDAwMDAsImV4cCI6NDEwMjQ0NDgwMCwianRpIjoiOWFhNmYyZDAtMmUzYS00MjM5LWI5YWItZTVlMWRjNjRjNDdmIiwiY2lkIjoiY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJzaWQiOiJjbG91ZCIsImVudiI6InRlc3QiLCJ0ZWFtIjoibW9udGhvcC1nbWFpbC9leGFtcGxlIiwicm9sZXMiOlsibWNwLXJlYWRlciJdLCJvcHMiOlsicmVhZCJdLCJjb3IiOiI4MzBkYWViOC05ODA4LTQ5NjQtOGI2Yi1mNmJjYTM0MDczNmYifQ.fBiW8Y8dQsp_qMNEYvcFTDk2fQq5BxUdcGImFzp0CaySYwrR2gnFP7lLUcLUU15kKXTy6xuR05UI73YN9t0cWXRwAc2hKn1ixVPK5xeAiR8h6lqKB1R9ZBMNYww77MPBhccYc9VCo6wsOaqi3aBsk2sL1xZZ9M3s7dqlwtTwiJqw2FJRwi68HR6iFpBJrC-1NwxpyQ4WYInOtQxpbt88KduHF0NX9g8rbiCaEYNYbe2Y3POf824QW1KO3w79hazCXooG4uyLEb-miVLmQj-LYosBulkjjpjNejd7pe5-iIC1JL5UQXG6Ku9iK-28DeMVvhmCZ9QMaH5lkfeMOCysFw",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "issuer_mismatch"
+      }
+    },
+    {
+      "id": "token_expired",
+      "why": "หมดอายุแล้ว",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3MDAwMDAwMDAsIm5iZiI6MTcwMDAwMDAwMCwiZXhwIjoxNzAwMDAwMTIwLCJqdGkiOiI0YzQ5ZTJhMS1jOWQ3LTRiYWQtOTlhYi03MThlZmU3ODkwOTgiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjMwZjU0YzZmLTU0M2ItNDBlZC04ZTc0LWI3ZTk4NjEwZTg4OCJ9.AIvthQnuhz2Ra5SZL1aDwzJ8_OhgTmjRfCs8EJADv5BapQH0WWYGfIkJfJ70-n4AFFPjgfNUBsTvGbWPDlORxrI9PJOHc2PSwW8QpOURXTDK3i2fhNl4-pmCx0UeiW27MEQT2ut1SZrEyfFBEWNp_2YkBb0jsehe5Xb8iw4pn1InAvCKvunu-hS6qJ1om4fVhCO6B36xYGkQkFiXUJZs91aeYVbWrOOL0BiyFMQD8Mkw5P6WVUbTuiXETAZ7fsjOt4DeJVJzW-NFvx045viMfhCo-s3ncwqT-rY-AC_lYBGxA2ExDqkWe66nryWcEb72yPdwj40A7hLqZDwrFqSXEw",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "token_expired"
+      }
+    },
+    {
+      "id": "token_not_yet_valid",
+      "why": "nbf อยู่ในอนาคต",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6NDEwMjQ0NDc5MCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiJkYTk3YmQyNi00NThiLTRkY2EtODZjOC01MTEwYTcwODY5ZGUiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjBmODJjZjg1LWFhYWUtNGM4NC05NTM3LTQ5NGYwMGI3ZTE5MyJ9.lixEj81RbTA7curVBIDGqArj1sw7K-9wAkEuffek2OJ-xI2FMRHHf_VjKXtHMnUPmOfvKnluVFvuhhbLlqYFWiNwFFvmiieNOBHACc8IhWebs-2gCakx64GgAe9wJGJflRtfNODMMDZS0XuK8DSs7ND8pvJG606K3u5RfygS2OSsF0dEttFG0V8p-FKfLVzCTlfdpl12LoMkrRKAr7wxczePxjpooIUwxGJFTVTjm87RWr8dG5nTSto0aKbGWeoHXKXlqNOrV65FIxWESxxJ5IigK-nXNzXFtazgJk8v5dFzuNORkNe9bGG1JuSz6dQmZ1ZBic4ahyKNr02einZ8pg",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "token_not_yet_valid"
+      }
+    },
+    {
+      "id": "no_exp",
+      "why": "ไม่มี exp เลย — ต้องปฏิเสธ ไม่ใช่ถือว่าไม่มีวันหมดอายุ",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwianRpIjoiYTI4NDY4MTAtY2M3Zi00MGI0LTlmZWMtNWI2MTVlY2E5ZDU5IiwiY2lkIjoiY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJzaWQiOiJjbG91ZCIsImVudiI6InRlc3QiLCJ0ZWFtIjoibW9udGhvcC1nbWFpbC9leGFtcGxlIiwicm9sZXMiOlsibWNwLXJlYWRlciJdLCJvcHMiOlsicmVhZCJdLCJjb3IiOiJmMmU0MjI1Zi1kMmU5LTQxMDgtYjVhOS0zNzZjOGUxMTczNGQifQ.c4h7PyOZjKYqaU98kLHm7hrYsiH0oDAnTUuhUU5f5i0191EHT12wtv55hr1yEBMOyUJrEZuoPXrcntYcZ-yPPP8XulQvSo5byknL-Y1ALn3BlpEAiDOyaOsi6m3HyM8_OLpy51aIXaKFgeJWj-742wBM-hveQWryov1s581GAd5IzoyjG6mddQac982DcHh6i-OB6TNXp3H2ChXbxGs_ReCtJG3L4OGq3-daB-lH7XDhEzZCS81DAJtL8AVwIBt4i1FeQtZMmfR9u0bS0wFypIA4L96kKHs6pKOBS-desTjG-vVvCy8QSoRLCnX-Z_vTXrzD2rEZ6duJZrjhbrz8CA",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "token_expired"
+      }
+    },
+    {
+      "id": "unknown_kid",
+      "why": "kid ไม่อยู่ใน JWKS",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Im5vdC1pbi1qd2tzIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiIwNTAyYmRiYy0yNmM2LTRmZmYtODNjOS04ODlmMzkzODkwMzMiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjZiMGY4YWUwLWIzZjEtNGZmNS05YzBmLTExYjczM2IyYjkxNCJ9.QydCrVx4JMAAVngx6pE15c73TGAJ79gSXqaipfE_PtdfKDIXF_2O0EmNJegBiEZ6tgga_vC_goWeaU5QfHbr_oPpTuenmjdv4YCdpM6I_6zKFlZ08bRwuXCOHj65bykyX34kv0KxiU8KiWNJ30a8_LGMbmHJLzTrzKWFRVuqGJ3hTE8aa2VUXwtwcpdtshHPzCZRQIuBvZPSo0Cd-nOstqBPK37Ur72TObJyYWTeZsKjWDPcCARRHEmI4sImGxgB-MCYEGEbp6YPfMQRjwDjXtMV8J3SRrTc_Y4tyfq8lw6UOmujiE0sW5K7FmR8nnm09smg4gTYBIt5FVgr3f6OfQ",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "unknown_kid"
+      }
+    },
+    {
+      "id": "signed_by_other_key",
+      "why": "kid ถูกแต่เซ็นด้วยกุญแจอื่น",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiIzYTQzMTIyNy0xOGQ2LTQ5MjAtODY3MS0zM2JiNTUwNDkxODgiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjA4ODM5Y2NkLWUxMWItNDY0Yy1hYjU3LTU2ZDkzYzkzYjdhOSJ9.q8AS0Jny2MwbTYcKteuKVkPaXcfEHSNiDaDBJGbyUfT3e-kUAymJtRcCtE8LJ58Y0775ZmM-GjtZsN3h23ZHdiMUVkd5BayYBx2Ah9DO2GslADD8trDxP14C14Xiqt4u_REoQk3i4gsUp9Zj_qvAiGKyWazaFjfv0HgL5R1D2jzTBt51j1r87QPdhdIaQeBiC53ZqDTc__waDJRrP-KgMZ6KPzWx3sigLAmRZtTMX1lmPDWCrMxuf-1H_WUjI3ydwtqe7HH-1GvOqwT6jiU7QPE5J7M_mafN9ykOVw-05c-0iXmbDAUeZYZ2IJakNMdZCqMXlpJhuknYhCyvBKkxqw",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "id": "tampered_payload",
+      "why": "แก้ ops ใน payload หลังเซ็น",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiJlN2Q4ZmQxMS0zZmFhLTQ0YzItYmFkYy1mMTY4NjdmM2ZhODYiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIiwid3JpdGUiLCJwcml2aWxlZ2VkIl0sImNvciI6IjE0NDU3MDZiLWM5NTktNGMzZC05MjJiLTg0MzdkMDU1YmNlZSJ9.Ul8-fHIbiXPpZicNbm4w5wCPfOi8-TC2BLLGQeCDekNg1VHfeT_x0blSITGKL9WdOiEueoFp0pbCKtEaSmFpa94X0p_SHRdi09RHcrm_jfp9yK2NdKOjvYWMWmfw4qJ_i_exIVHUWCHXuoeCr5Ntbdc_iWUVxpXi47h88-MK6aan7q8NldjxKKu16m12ytgjhb2ID2KaVS4NLxq8Nqs0Ip4dyagXLR05mR2_kdfi9EaYt_u8kJVt0efL1TbbMKgO7rT5nPoTB0gwpPwfiyebXwoSc2rbfqlKYlSrzM7dZWdox9zVm-Mbq4cTRziUCcMx3mMSTfy-aEECrYJvPMKz6A",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "id": "alg_none",
+      "why": "alg:none — ต้องปฏิเสธจาก allowlist ของเรา ไม่ใช่เชื่อสิ่งที่โทเคนบอก",
+      "token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIiwia2lkIjoiY29uZm9ybWFuY2Uta2V5LTEifQ.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiI4ZGU3MmZmZS1hNTdiLTQ2YjItOWJkYi1iYzQ3MmZjNmQxODciLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjU2ZGUwNTY5LWZhNzctNDk3YS05MGIxLTMwNmYyNDJjNzA2YyJ9.",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_alg"
+      }
+    },
+    {
+      "id": "alg_none_with_garbage_signature",
+      "why": "alg:none ที่ใส่ขยะเป็นลายเซ็น — ต้องตกที่ด่าน alg ไม่ใช่ตกเพราะลายเซ็นว่าง",
+      "token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIiwia2lkIjoiY29uZm9ybWFuY2Uta2V5LTEifQ.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiJkYzY0ZDhlMy01NzYzLTRmMTMtOTlhYy1iYjJjOWMzM2UzMjgiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6ImY1ZjJjZDFiLTIwYmYtNDBiYS1iNTFmLWQ3ZWNiMWFmOThjYiJ9.4LmE4Lih4LmI4LmD4LiK4LmI4Lil4Liy4Lii4LmA4LiL4LmH4LiZ4LiI4Lij4Li04LiH",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_alg"
+      }
+    },
+    {
+      "id": "alg_hs256_confusion",
+      "why": "RS256→HS256 confusion — เซ็น HMAC ด้วยกุญแจสาธารณะเป็นความลับ",
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiIyNTY0ODRmNi00MWE4LTRjM2EtOGY4ZS05NDdhZDQ0MmE4NmIiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6ImU0OGI5OWI0LThmZmUtNGZlMi05YWMwLWQxZmZjNjZkMDBjNiJ9.00YZUi6NLsrzAjg6y3PfZNWyAWk1E0jFTt-bJLjpfkE",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "unsupported_alg"
+      }
+    },
+    {
+      "id": "malformed_token",
+      "why": "ไม่ใช่รูป JWT",
+      "token": "this-is-not-a-jwt",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "malformed_token"
+      }
+    },
+    {
+      "id": "empty_token",
+      "why": "ไม่มีโทเคนเลย",
+      "token": "",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "malformed_token"
+      }
+    },
+    {
+      "id": "replay_first_use",
+      "why": "ใช้ครั้งแรก ต้องผ่าน",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiJjMTYzZDVhNS0yOWI1LTRlMzAtOGQ3Ni01NDVkNjNlMjg3NzQiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjZiYjlmZDc4LTY0ZmUtNGI1OS1hYjMxLWVkMzdmODQxYTkyZCJ9.lq8KdcEaY7aS2yGUulYSoJtG2zt8veeH7903iz49A3HBWy7OnDw0V97sDkvewupI5S4cUIx7Y4iolvZ8UWslrYlquY-bYdJU4CQu9GjmYgY7WAom1zVAvi7WQnZ3Dtjw8Nm0osN9icTfjfnW7T547hhth1l977TlYU8n6mkY6nZo6PBADwzO_WHAET39KL3uxH7D8nMlTzMkpby1hES-RwoTXKmaLRwdSnCpczyAhsinB8j09nJhzrccWWLJ3wgwrResuaZdMtak3V9ciZlavZoaX0_LX61eQkvBNf0QjdLE9J383Zp4Z1PBACqLG0OnyjW0MZ77WjS3rOezZj8M5w",
+      "operation": "read",
+      "expect": {
+        "ok": true,
+        "sub": "oidc:conformance-subject"
+      },
+      "requires": "trackJti",
+      "order": 1
+    },
+    {
+      "id": "replay_second_use",
+      "why": "jti เดิมซ้ำ — ผ่านได้เฉพาะ adapter ที่ประกาศว่าไม่เก็บ seen-jti",
+      "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImNvbmZvcm1hbmNlLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2d3LmV4YW1wbGUuaW50ZXJuYWwvbWNwIiwic3ViIjoib2lkYzpjb25mb3JtYW5jZS1zdWJqZWN0IiwiYXVkIjoibWNwOi8vZ3cuZXhhbXBsZS5pbnRlcm5hbC9jb25uZWN0b3IvY29sbGFiLXJlYWRvbmx5LXRlc3QiLCJpYXQiOjE3ODkwMDAwMDAsIm5iZiI6MTc4OTAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwLCJqdGkiOiJjMTYzZDVhNS0yOWI1LTRlMzAtOGQ3Ni01NDVkNjNlMjg3NzQiLCJjaWQiOiJjb2xsYWItcmVhZG9ubHktdGVzdCIsInNpZCI6ImNsb3VkIiwiZW52IjoidGVzdCIsInRlYW0iOiJtb250aG9wLWdtYWlsL2V4YW1wbGUiLCJyb2xlcyI6WyJtY3AtcmVhZGVyIl0sIm9wcyI6WyJyZWFkIl0sImNvciI6IjZiYjlmZDc4LTY0ZmUtNGI1OS1hYjMxLWVkMzdmODQxYTkyZCJ9.lq8KdcEaY7aS2yGUulYSoJtG2zt8veeH7903iz49A3HBWy7OnDw0V97sDkvewupI5S4cUIx7Y4iolvZ8UWslrYlquY-bYdJU4CQu9GjmYgY7WAom1zVAvi7WQnZ3Dtjw8Nm0osN9icTfjfnW7T547hhth1l977TlYU8n6mkY6nZo6PBADwzO_WHAET39KL3uxH7D8nMlTzMkpby1hES-RwoTXKmaLRwdSnCpczyAhsinB8j09nJhzrccWWLJ3wgwrResuaZdMtak3V9ciZlavZoaX0_LX61eQkvBNf0QjdLE9J383Zp4Z1PBACqLG0OnyjW0MZ77WjS3rOezZj8M5w",
+      "operation": "read",
+      "expect": {
+        "ok": false,
+        "reason": "replayed_jti"
+      },
+      "requires": "trackJti",
+      "order": 2
+    }
+  ]
+}

@@ -29,7 +29,16 @@ import { secretsMatch } from "./http";
  */
 export interface StaticIdentity {
   name: string;
-  source: "config" | "header" | "token";
+  /**
+   * กลไกที่ทำให้ได้ชื่อนี้มา ไม่ใช่ระดับความเชื่อถือ
+   *
+   * `jwt` ต่างจากอีกสามตัวตรงที่ชื่อมาจาก `sub` ที่ตรวจลายเซ็นแล้ว ผู้ถือโทเคน
+   * แก้ไม่ได้ — ส่วนอีกสามตัวเป็นป้ายที่ผูกไว้กับรหัสหรือผู้เรียกพิมพ์มาเอง
+   *
+   * เก็บเป็นกลไกเพราะระดับความเชื่อถือเป็นข้อสรุปที่ server สรุปแทนผู้อ่านไม่ได้
+   * ตามที่ agent-platform ทักไว้ใน dis-c6095786 seq 4
+   */
+  source: "config" | "header" | "token" | "jwt";
 }
 
 export interface Author {
@@ -108,11 +117,13 @@ export function resolveAuthor(
   if (!staticIdentity) return { client: "static-bearer", name: "Static bearer" };
 
   const client =
-    staticIdentity.source === "header"
-      ? `static-header:${staticIdentity.name}`
-      : staticIdentity.source === "token"
-        ? `static-token:${staticIdentity.name}`
-        : "static-bearer";
+    staticIdentity.source === "jwt"
+      ? `jwt:${staticIdentity.name}`
+      : staticIdentity.source === "header"
+        ? `static-header:${staticIdentity.name}`
+        : staticIdentity.source === "token"
+          ? `static-token:${staticIdentity.name}`
+          : "static-bearer";
 
   return { client, name: staticIdentity.name };
 }

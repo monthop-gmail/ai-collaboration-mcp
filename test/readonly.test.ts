@@ -2,6 +2,8 @@ import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:
 import { beforeAll, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { applySchema } from "./apply-schema";
+import gateway from "./fixtures/gateway-conformance/vectors.json";
+import gatewayJwks from "./fixtures/gateway-conformance/jwks.json";
 
 /**
  * เส้นทางอ่านอย่างเดียวต้องกันสองอย่างที่พังเงียบได้
@@ -37,7 +39,12 @@ const WRITE_TOOLS = [
   "resolve_decision",
 ];
 
-async function call(path: string, token: string | undefined, body: unknown): Promise<Response> {
+async function call(
+  path: string,
+  token: string | undefined,
+  body: unknown,
+  extra: { env?: typeof testEnv; headers?: Record<string, string> } = {},
+): Promise<Response> {
   const ctx = createExecutionContext();
   const response = await worker.fetch(
     new Request(`https://example.test${path}`, {
@@ -46,10 +53,11 @@ async function call(path: string, token: string | undefined, body: unknown): Pro
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...extra.headers,
       },
       body: JSON.stringify(body),
     }),
-    testEnv,
+    extra.env ?? testEnv,
     ctx,
   );
   await waitOnExecutionContext(ctx);
@@ -101,9 +109,13 @@ describe("เส้นอ่านไม่ตกไปที่ OAuth provider 
   it("รหัสไม่ผ่าน ต้องได้ 401 ของเส้นนี้เอง ไม่ใช่ flow ของเส้นปกติ", async () => {
     const response = await call("/mcp-readonly", "not-a-real-token", INIT);
     expect(response.status).toBe(401);
-    const body = (await response.json()) as { error?: string; detail?: string };
+    const body = (await response.json()) as { error?: string; reason?: string };
     expect(body.error).toBe("unauthorized");
-    expect(body.detail).toContain("MCP_READONLY_TOKENS");
+    // รหัสจากชุดปิด ไม่ใช่ข้อความอิสระ เพราะฝั่ง gateway นับค่านี้ในตารางบันทึก
+    expect(body.reason).toBe("unknown_token");
+    // และต้องเป็นคำท้าของเส้นนี้ ไม่ใช่ของ OAuth provider ซึ่งจะพาไป flow ที่เขียนได้
+    expect(response.headers.get("www-authenticate")).toContain("ai-collaboration read-only");
+    expect(response.headers.get("www-authenticate")).not.toContain("resource_metadata");
   });
 });
 
@@ -146,5 +158,99 @@ describe("cache ของ handler แยกตามเส้นทาง", () =
     expect(rwNames).toContain("post_message");
     expect(roNames).not.toContain("post_message");
     expect(roNames.length).toBeLessThan(rwNames.length);
+  });
+});
+
+/**
+ * เส้น JWT ของ gateway บน route จริง ไม่ใช่เรียก adapter ตรง
+ *
+ * ชุด vector วัดตัว verifier ไปแล้วใน `jwt.test.ts` ส่วนที่นี่วัดว่า **route ใช้มันจริง**
+ * และตัวตนที่ได้ไปถึงชั้นที่บันทึกผู้เขียน — verifier ที่ถูกแต่ไม่ได้ต่อ พิสูจน์อะไรไม่ได้
+ */
+const GATEWAY_ENV = {
+  ...testEnv,
+  GATEWAY_JWT_ISSUER: gateway.issuer,
+  GATEWAY_JWT_AUDIENCE: gateway.audience,
+  GATEWAY_JWKS: JSON.stringify(gatewayJwks),
+} as unknown as typeof testEnv;
+
+const vector = (id: string) =>
+  (gateway.vectors as Array<{ id: string; token: string }>).find((v) => v.id === id)!.token;
+
+const CONTEXT_CALL = {
+  jsonrpc: "2.0",
+  id: 9,
+  method: "tools/call",
+  params: { name: "get_workspace_context", arguments: { limit: 1 } },
+};
+
+async function youAre(response: Response): Promise<string | undefined> {
+  const body = await payload(response);
+  const text = (body.result as { content?: Array<{ text?: string }> })?.content?.[0]?.text;
+  return text ? (JSON.parse(text) as { you_are?: string }).you_are : undefined;
+}
+
+describe("เส้น JWT ของ gateway ต่อกับ route จริง", () => {
+  it("โทเคนที่ผ่านทุกด่าน เข้าได้ และตัวตนคือ sub ที่ตรวจลายเซ็นแล้ว", async () => {
+    const response = await call("/mcp-readonly", vector("valid_read"), CONTEXT_CALL, {
+      env: GATEWAY_ENV,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await youAre(response)).toBe("oidc:conformance-subject");
+  });
+
+  /**
+   * เงื่อนไขของใบงาน — `X-Client-Name` ที่ปลอมมาต้องไม่มีผลต่อ actor
+   *
+   * ทำด้วยการไม่เคยอ่าน header บนเส้นนี้ ไม่ใช่การอ่านแล้วเทียบทิ้ง เพราะการอ่าน
+   * แล้วเทียบทิ้งยังเปิดช่องให้ใครสลับลำดับทีหลังแล้วมันกลับมามีผล
+   */
+  it("X-Client-Name ปลอม ไม่มีผลต่อตัวตน", async () => {
+    const response = await call("/mcp-readonly", vector("valid_read"), CONTEXT_CALL, {
+      env: GATEWAY_ENV,
+      headers: { "x-client-name": "monthop-gmail/agent-platform" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await youAre(response)).toBe("oidc:conformance-subject");
+  });
+
+  it("aud รูป array ที่มีค่าที่ถูกอยู่ในรายการ ต้องถูกปฏิเสธที่ route ไม่ใช่แค่ใน adapter", async () => {
+    const response = await call(
+      "/mcp-readonly",
+      vector("audience_array_contains_valid"),
+      CONTEXT_CALL,
+      { env: GATEWAY_ENV },
+    );
+
+    expect(response.status).toBe(401);
+    expect(((await response.json()) as { reason?: string }).reason).toBe("audience_mismatch");
+  });
+
+  it("cid ไม่ตรง connector ถูกปฏิเสธด้วยรหัสของตัวเอง", async () => {
+    const response = await call("/mcp-readonly", vector("cid_mismatch"), CONTEXT_CALL, {
+      env: GATEWAY_ENV,
+    });
+
+    expect(((await response.json()) as { reason?: string }).reason).toBe("connector_mismatch");
+  });
+
+  /**
+   * ไม่ตั้ง config ของ gateway = ปิดเส้น JWT ทั้งเส้น ไม่ใช่รับโทเคนแบบหลวม ๆ
+   * adapter ที่ไม่รู้ audience ของตัวเอง จะกลายเป็น adapter ที่รับโทเคนใดก็ได้
+   */
+  it("ไม่มี config ของ gateway โทเคนรูป JWT ตกไปทาง static แล้วไม่ผ่าน", async () => {
+    const response = await call("/mcp-readonly", vector("valid_read"), CONTEXT_CALL);
+
+    expect(response.status).toBe(401);
+    expect(((await response.json()) as { reason?: string }).reason).toBe("unknown_token");
+  });
+
+  it("รหัส static เดิมยังใช้ได้ควบคู่กัน เป็น compatibility path", async () => {
+    const response = await call("/mcp-readonly", RO, CONTEXT_CALL, { env: GATEWAY_ENV });
+
+    expect(response.status).toBe(200);
+    expect(await youAre(response)).toBe("test-team-readonly");
   });
 });

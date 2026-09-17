@@ -29,6 +29,20 @@ export interface Env {
    */
   MCP_READONLY_TOKENS?: string;
   /**
+   * สามค่าของ upstream adapter บนเส้น `/mcp-readonly` — ตรวจโทเคนของ gateway
+   *
+   * ตั้งครบสามค่าจึงเปิดเส้นทาง JWT ถ้าขาดตัวใดตัวหนึ่ง เส้นนั้นเหลือแต่ static
+   * bearer เดิม เพราะ adapter ที่ไม่รู้ว่า audience ของตัวเองคืออะไร จะกลายเป็น
+   * adapter ที่รับโทเคนใดก็ได้ที่ออกโดย gateway ซึ่งสัญญาระบุว่าเป็น adapter ที่ผิด
+   *
+   * `GATEWAY_JWKS` เป็นค่าคงที่ที่ฝังไว้ ไม่ได้ดึงจาก endpoint — ข้อจำกัดนี้ถูก
+   * ประกาศกลับไปเป็น `jwks_pinned_not_fetched` และแปลว่าการหมุนกุญแจเป็นกระบวนการ
+   * ของคน ไม่ใช่ของระบบ ต้องถอดก่อนเปิด write
+   */
+  GATEWAY_JWT_ISSUER?: string;
+  GATEWAY_JWT_AUDIENCE?: string;
+  GATEWAY_JWKS?: string;
+  /**
    * แก้ชื่อที่แสดง เมื่อชื่อที่ค่ายส่งมาตอน DCR ไม่ตรงกับชื่อที่คนเรียกกัน
    * รูปแบบ `ชื่อที่ส่งมา=ชื่อที่จะแสดง` คั่นด้วย comma เช่น `Google=Gemini`
    */
