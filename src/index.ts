@@ -6,9 +6,19 @@ import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
 import { handleView } from "./view";
 import { nameForToken, staticIdentityFor, type StaticIdentity } from "./identity";
+import { withReadOnlyGuard } from "./readonly";
 import type { Env } from "./env";
 
 const MCP_ROUTE = "/mcp";
+
+/**
+ * เส้นทางอ่านอย่างเดียว แยก path และแยกรหัสจากเส้นปกติ
+ *
+ * แยกทั้งสองอย่างเพราะถ้าแยกแค่ path รหัสใบเดียวก็ยังเดินได้ทั้งสองทาง ขอบเขต
+ * ความเชื่อถือจึงไม่มีอยู่จริง — การผูกนี้คือรหัส → เส้นทาง/ความสามารถ ไม่ใช่
+ * รหัส → ตัวตนของคน ซึ่งเป็นคนละเรื่องกับที่ยังพักไว้
+ */
+const MCP_READONLY_ROUTE = "/mcp-readonly";
 
 /**
  * factory ของ server ไม่ได้รับ env แต่ละ handler จึงปิดทับ env ที่สร้างมันมา
@@ -30,24 +40,26 @@ const handlers = new WeakMap<object, Map<string, StatelessMcpHandler>>();
  */
 const MAX_CACHED_HANDLERS = 32;
 
-function getHandler(env: Env, identity?: StaticIdentity): StatelessMcpHandler {
+function getHandler(env: Env, identity?: StaticIdentity, readOnly = false): StatelessMcpHandler {
   let byIdentity = handlers.get(env as object);
   if (!byIdentity) {
     byIdentity = new Map();
     handlers.set(env as object, byIdentity);
   }
 
-  const key = identity ? `${identity.source}:${identity.name}` : "";
+  // เส้นทางเป็นส่วนหนึ่งของ key ไม่งั้น handler ที่ถูก cache ไว้จากเส้นหนึ่งจะถูก
+  // หยิบไปใช้กับอีกเส้น แล้ว server ที่ปิด tool ไว้จะกลายเป็นเปิด
+  const key = `${readOnly ? "ro" : "rw"}|${identity ? `${identity.source}:${identity.name}` : ""}`;
   const cached = byIdentity.get(key);
   if (cached) return cached;
 
   const handler = createMcpHandler(
     () => {
       const server = new McpServer({ name: "ai-collaboration", version: "0.1.0" });
-      registerTools(server, env, identity);
+      registerTools(readOnly ? withReadOnlyGuard(server) : server, env, identity);
       return server;
     },
-    { route: MCP_ROUTE, ...originOptions(env) },
+    { route: readOnly ? MCP_READONLY_ROUTE : MCP_ROUTE, ...originOptions(env) },
   );
 
   if (byIdentity.size < MAX_CACHED_HANDLERS) byIdentity.set(key, handler);
@@ -72,8 +84,12 @@ function bearerToken(request: Request): string | undefined {
   return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
 }
 
-const mcpApiHandler = {
-  async fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
+async function serveMcp(
+  request: Request,
+  env: OAuthEnv,
+  ctx: ExecutionContext,
+  readOnly: boolean,
+): Promise<Response> {
     // คำนวณชื่อสำรองให้ทุกคำขอ ไม่ต้องแยกว่ามาทางไหน เพราะ `resolveAuthor` ให้
     // ตัวตนจาก OAuth ชนะเสมอเมื่อมี — ชื่อจาก header หรือจากโทเค็นจึงมีผลเฉพาะ
     // เส้น static bearer ส่วนคำขอที่มาทาง OAuth ถือโทเค็นคนละใบอยู่แล้วจึงไม่ตรง
@@ -88,7 +104,12 @@ const mcpApiHandler = {
       return json({ error: "invalid_client_name", detail: identity.reason }, 400);
     }
 
-    return getHandler(env, identity.identity)(request, env, ctx);
+  return getHandler(env, identity.identity, readOnly)(request, env, ctx);
+}
+
+const mcpApiHandler = {
+  fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
+    return serveMcp(request, env, ctx, false);
   },
 };
 
@@ -99,6 +120,61 @@ const mcpApiHandler = {
  * รหัสร่วมตรง ๆ ส่วน AI chat บนคลาวด์ทำไม่ได้ ต้องผ่าน OAuth ทั้งสองทางไปจบที่
  * handler เดียวกัน แต่ **ได้ตัวตนคนละแบบ** — ทางแรกไม่มี identity จาก DCR ให้อ่าน
  */
+/**
+ * บันทึกการใช้งานของเส้นอ่านอย่างเดียวเท่าที่ตอบคำถามว่า "หก tool พอไหม"
+ *
+ * เก็บ: ชื่อ tool ที่ถูกเรียก, ผลว่าผ่านหรือถูกปฏิเสธ, เวลาที่ใช้
+ * ไม่เก็บ: argument, เนื้อหา, โทเค็น, ตัวตนของผู้ใช้ และไม่แตะคำขอของเส้นปกติ
+ *
+ * อ่านชื่อ tool จาก body ซึ่งเป็น JSON-RPC อยู่แล้ว โดย clone request ก่อนเสมอ
+ * เพราะ body อ่านได้ครั้งเดียว ถ้าอ่านตรง ๆ handler จะได้ body เปล่า
+ */
+async function servePilotRoute(
+  request: Request,
+  env: OAuthEnv,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  let method: string | undefined;
+  let tool: string | undefined;
+  try {
+    const body = (await request.clone().json()) as {
+      method?: unknown;
+      params?: { name?: unknown };
+    };
+    method = typeof body.method === "string" ? body.method : undefined;
+    tool = typeof body.params?.name === "string" ? body.params.name : undefined;
+  } catch {
+    // คำขอที่ไม่ใช่ JSON ไม่ต้องบันทึกอะไร ปล่อยให้ handler จัดการต่อ
+  }
+
+  const started = Date.now();
+  const response = await serveMcp(request, env, ctx, true);
+
+  if (method === "tools/call" || method === "tools/list") {
+    console.log(
+      JSON.stringify({
+        at: new Date().toISOString(),
+        event: "pilot_call",
+        method,
+        tool,
+        status: response.status,
+        ms: Date.now() - started,
+      }),
+    );
+  }
+  return response;
+}
+
+/**
+ * รหัสของเส้นอ่านอย่างเดียว อยู่คนละรายการกับรหัสปกติโดยตั้งใจ ใบที่อยู่ในรายการนี้
+ * เข้าเส้นปกติไม่ได้ และใบของเส้นปกติก็เข้าเส้นนี้ไม่ได้
+ */
+async function hasReadOnlyBearer(request: Request, env: Env): Promise<boolean> {
+  const token = bearerToken(request);
+  if (!token) return false;
+  return Boolean(await nameForToken(token, env.MCP_READONLY_TOKENS));
+}
+
 async function hasStaticBearer(request: Request, env: Env): Promise<boolean> {
   const token = bearerToken(request);
   if (!token) return false;
@@ -150,6 +226,19 @@ export default {
       if (await hasStaticBearer(request, env)) {
         return mcpApiHandler.fetch(request, env, ctx);
       }
+    }
+
+    if (pathname === MCP_READONLY_ROUTE) {
+      // เส้นนี้ไม่ผูกกับ OAuth provider จึงต้องตอบ 401 เองเมื่อรหัสไม่ผ่าน แทนที่จะ
+      // ตกไปให้ provider ซึ่งจะพาไปหา flow ของเส้นปกติ
+      if (await hasReadOnlyBearer(request, env)) {
+        return servePilotRoute(request, env, ctx);
+      }
+      return json(
+        { error: "unauthorized", detail: "read-only route requires a token from MCP_READONLY_TOKENS" },
+        401,
+        { "WWW-Authenticate": 'Bearer realm="ai-collaboration read-only"' },
+      );
     }
 
     // ที่เหลือเป็นของ provider — endpoint ของ OAuth, discovery metadata, หน้า

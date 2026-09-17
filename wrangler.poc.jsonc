@@ -1,0 +1,30 @@
+// Config ของ deployment ทดสอบเท่านั้น — ชื่อ Worker, ฐาน D1 และ KV ของ OAuth
+// แยกจากของจริงทั้งหมด เพื่อไม่ให้ grant/token/ข้อมูลของสองฝั่งปนกัน
+// สร้างตาม dis-bc779b20 seq 23 · ลบทิ้งเมื่อจบรอบตาม docs/poc/collab-test-deployment.md
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-collaboration-mcp-poc",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-21",
+  "observability": {
+    "enabled": true
+  },
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "CLIENT_NAME_ALIASES": "Google=Gemini"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "9ad46a74ee5b4a1a88e8c230aa11d2d7"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-collab-poc",
+      "database_id": "d3ea7845-ee84-46a3-a8a5-0e83828abc2e"
+    }
+  ]
+}
