@@ -88,6 +88,26 @@ export const Limit = z
   .default(DEFAULT_LIMIT)
   .describe(`Maximum rows to return (1-${MAX_LIMIT}).`);
 
+/**
+ * เกณฑ์ความเงียบของกระทู้ — ไม่มีค่าเริ่มต้น เพราะ "เงียบ" ไม่เท่ากับ "จบแล้ว"
+ *
+ * การกรองต้องเป็นสิ่งที่ผู้เรียกขอ ไม่ใช่สิ่งที่ server ทำให้เงียบ ๆ ถ้า server กรอง
+ * เองโดย default ค่า `discussions` เดิมจะเปลี่ยนความหมายจาก "ทั้งหมด" เป็น
+ * "เฉพาะที่ยังเคลื่อนไหว" ซึ่งเป็นการเปลี่ยนความหมายของคีย์เดิม ไม่ใช่การเพิ่มคีย์
+ * และจะลาก contract 3 มาโดยไม่ตั้งใจ — ตามที่ตกลงกันไว้ที่ dis-c6095786 seq 7 ข้อ D
+ */
+export const QuietForDays = z
+  .number()
+  .int()
+  .min(1)
+  .max(3650)
+  .optional()
+  .describe(
+    "Optional. Hide discussions with no activity for this many days. " +
+      "Omit to get every discussion, which is the default and the unchanged behaviour. " +
+      "Whatever you pass, the result always reports how many were hidden.",
+  );
+
 export function formatResult(result: unknown) {
   const text =
     typeof result === "string" ? result : JSON.stringify(result, null, 2) ?? String(result);

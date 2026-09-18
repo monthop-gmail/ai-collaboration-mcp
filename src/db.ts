@@ -225,7 +225,20 @@ export interface WorkspaceContext {
   workspace: Workspace;
   discussions: DiscussionSummary[];
   has_more: boolean;
+  /** จำนวนกระทู้ทั้งหมดใน workspace — ความหมายนี้ไม่เปลี่ยนตามการกรอง */
   total_discussions: number;
+  /**
+   * ผลของการกรองตามความเงียบ — มีอยู่เสมอ ไม่ว่าผู้เรียกจะขอกรองหรือไม่
+   *
+   * `threshold_days` เป็น null แปลว่าไม่ได้กรอง ซึ่งต่างจากกรองแล้วไม่มีอะไรโดนซ่อน
+   * ผู้อ่านต้องแยกสองอย่างนี้ออกจากกันได้จากผลลัพธ์เดียว — หลักเดียวกับที่ `acted_as`
+   * แยกใบไม่มีเจ้าของ ออกจากใบที่มีเจ้าของแล้วตรงกัน
+   *
+   * **ไม่มีค่าเริ่มต้นให้เกณฑ์นี้โดยเจตนา** เพราะกระทู้ที่เงียบสามสิบวันอาจเป็นเรื่อง
+   * ที่จบไปแล้ว หรือเรื่องที่รอคนนอกอยู่ ระบบแยกสองอย่างนี้ไม่ออก การตั้งเลขให้เอง
+   * คือการตัดสินแทนผู้เรียกด้วยข้อมูลที่ไม่มี
+   */
+  quiet_discussions: { threshold_days: number | null; hidden: number };
   participants: string[];
 }
 
@@ -239,8 +252,16 @@ export async function readWorkspaceContext(
   db: D1Database,
   workspaceId: string,
   limit: number,
+  quietForDays?: number,
 ): Promise<WorkspaceContext> {
   const workspace = await getWorkspace(db, workspaceId);
+
+  // กระทู้ที่ไม่มีข้อความเลย ใช้วันที่เปิดเป็นความเคลื่อนไหวล่าสุด ไม่ใช่ถือว่าเงียบนิรันดร์
+  const ACTIVITY = "COALESCE(MAX(m.created_at), d.created_at)";
+  const cutoff =
+    quietForDays === undefined
+      ? null
+      : new Date(Date.now() - quietForDays * 86_400_000).toISOString();
 
   const { results } = await db
     .prepare(
@@ -253,10 +274,11 @@ export async function readWorkspaceContext(
          LEFT JOIN messages m ON m.discussion_id = d.id
         WHERE d.workspace_id = ?1
         GROUP BY d.id
-        ORDER BY COALESCE(MAX(m.created_at), d.created_at) DESC
+        ${cutoff === null ? "" : `HAVING ${ACTIVITY} >= ?3`}
+        ORDER BY ${ACTIVITY} DESC
         LIMIT ?2`,
     )
-    .bind(workspaceId, limit + 1)
+    .bind(...(cutoff === null ? [workspaceId, limit + 1] : [workspaceId, limit + 1, cutoff]))
     .all<{
       id: string;
       title: string;
@@ -275,6 +297,23 @@ export async function readWorkspaceContext(
     .prepare("SELECT COUNT(*) AS n FROM discussions WHERE workspace_id = ?1")
     .bind(workspaceId)
     .first<{ n: number }>();
+
+  // นับของที่ถูกกรองออกจริง ๆ ไม่ใช่ลบยอดกัน เพราะ `limit` ตัดจากรายการเดียวกัน
+  // แล้วถ้าเอาสองยอดมาลบกัน ของที่แค่เกินเพดานจะถูกรายงานว่าถูกซ่อนเพราะเงียบ
+  const quiet =
+    cutoff === null
+      ? { n: 0 }
+      : ((await db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM (
+               SELECT d.id FROM discussions d
+                 LEFT JOIN messages m ON m.discussion_id = d.id
+                WHERE d.workspace_id = ?1
+                GROUP BY d.id
+               HAVING ${ACTIVITY} < ?2)`,
+          )
+          .bind(workspaceId, cutoff)
+          .first<{ n: number }>()) ?? { n: 0 });
 
   const everyone = await db
     .prepare(
@@ -301,6 +340,7 @@ export async function readWorkspaceContext(
     })),
     has_more: hasMore,
     total_discussions: total?.n ?? rows.length,
+    quiet_discussions: { threshold_days: quietForDays ?? null, hidden: quiet.n },
     participants: everyone.results.map((r) => r.name),
   };
 }

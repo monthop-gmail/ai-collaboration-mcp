@@ -11,7 +11,7 @@ import {
   readWorkspaceContext,
   type MessageKind,
 } from "./db";
-import { CONTRACT_VERSION, Limit, Workspace, registerTool, run } from "./tool-kit";
+import { CONTRACT_VERSION, Limit, QuietForDays, Workspace, registerTool, run } from "./tool-kit";
 import { readOpenItems } from "./db-work";
 import { registerWorkTools } from "./tools-work";
 
@@ -175,13 +175,14 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
       inputSchema: z.object({
         workspace: Workspace,
         limit: Limit,
+        quiet_for_days: QuietForDays,
       }),
     },
-    async ({ workspace, limit }) =>
+    async ({ workspace, limit, quiet_for_days }) =>
       run(async () => {
         const me = author();
         const [context, openItems] = await Promise.all([
-          readWorkspaceContext(env.DB, workspace, limit),
+          readWorkspaceContext(env.DB, workspace, limit, quiet_for_days),
           readOpenItems(env.DB, workspace, me.name),
         ]);
 
@@ -196,6 +197,7 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
           discussions: context.discussions,
           has_more: context.has_more,
           total_discussions: context.total_discussions,
+          quiet_discussions: context.quiet_discussions,
         };
       }),
   );
