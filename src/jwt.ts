@@ -2,7 +2,7 @@
  * ตรวจโทเคนของ gateway บนเส้นทางอ่านอย่างเดียว — upstream adapter
  *
  * สัญญาอยู่ที่ `ADAPTER.md` ของ `monthop-gmail/internal-mcp-gateway` ที่ `7dbea5f`
- * และชุด vector ที่วัดไฟล์นี้อยู่ที่ `test/fixtures/gateway-conformance/`
+ * และชุด vector ที่วัดไฟล์นี้อยู่ที่ `test/fixtures/adapter-conformance/`
  *
  * สิ่งที่ไฟล์นี้ทำ ตรวจโทเคนแล้วคืนตัวตน
  * สิ่งที่ไฟล์นี้ไม่ทำ ไม่ออกโทเคน ไม่ตัดสินนโยบายแทน gateway และ **ไม่เชื่อว่าคำขอ
@@ -97,13 +97,28 @@ export interface AdapterConfig {
    */
   trackJti?: boolean;
   /**
-   * connector ที่ `cid` ต้องตรงกับ
+   * connector ที่ `cid` ต้องตรงกับ — **ค่าบังคับ**
    *
-   * ไม่ส่งมาก็อ่านจากส่วนท้ายของ `audience` เพราะ harness ของฝั่ง gateway ส่ง config
-   * มาแค่สี่ค่าและไม่มี connector id อยู่ในนั้น — การอ่านจาก audience ทำให้ `aud`
-   * กับ `cid` ต้องตรงกันเอง ซึ่งเป็นการเทียบสองทางที่สัญญาอ้างไว้
+   * รอบแรกไฟล์นี้แกะเอาจากส่วนท้ายของ `audience` เพราะ harness ส่ง config มาสี่ค่า
+   * ซึ่งผ่านชุดทดสอบ แต่อ่อนกว่าที่ควร และฝั่ง gateway แก้ harness ให้ส่งค่าที่ห้ามาแล้ว
+   *
+   * เหตุผลที่การแกะเองอ่อนกว่า — มันเปลี่ยนด่านนี้จาก "cid ตรงกับ connector ที่ประกาศ
+   * ไว้ไหม" เป็น "cid ตรงกับส่วนท้ายของ audience ไหม" ซึ่งสองอย่างนี้เท่ากันเฉพาะ
+   * ตอนที่ audience สะกดตามรูปที่เราเดา สัญญาไม่ได้รับประกันรูปนั้น ถ้าวันหนึ่ง
+   * audience ของจริงเป็นรูปอื่น ด่านนี้จะยังเขียวโดยที่เทียบคนละเรื่องกับที่ตั้งใจ
+   *
+   * ทำเป็นค่าบังคับแทนที่จะเป็น optional ที่มีค่าสำรอง เพราะค่าสำรองที่ผิดเงียบ ๆ
+   * แย่กว่าการบังคับให้คนตั้งค่าเพิ่มหนึ่งตัว
    */
-  connectorId?: string;
+  connectorId: string;
+  /**
+   * กุญแจที่ตั้งไว้มาจากไหน — `"fixture"` คือชุด vector สาธารณะ
+   *
+   * โทเคนในชุดนั้นมี `exp` ไกลถึงปี 2100 และอยู่ในรีโปสาธารณะ ใครอ่านรีโปแล้วหยิบ
+   * ไปยิงใส่ deployment ที่ตั้งกุญแจชุดนั้นได้ทันที — ยอมรับได้เฉพาะ deployment
+   * ทดสอบที่ไม่มีข้อมูลจริง และต้องประกาศตัว ไม่ใช่ตั้งไปเงียบ ๆ
+   */
+  jwksSource?: "fixture" | "gateway";
   /** นาฬิกา แยกออกมาให้เทสต์เดินเวลาได้ */
   now?: () => number;
 }
@@ -147,18 +162,12 @@ function jsonSegment(segment: string): Record<string, unknown> | undefined {
   }
 }
 
-function connectorFromAudience(audience: string): string {
-  const marker = "/connector/";
-  const at = audience.lastIndexOf(marker);
-  return at === -1 ? audience : audience.slice(at + marker.length);
-}
-
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 export function createAdapter(config: AdapterConfig): UpstreamAdapter {
-  const expectedCid = config.connectorId ?? connectorFromAudience(config.audience);
+  const expectedCid = config.connectorId;
   const clock = config.now ?? (() => Date.now());
   const trackJti = config.trackJti === true;
   // เก็บเฉพาะเมื่อผู้เรียกยืนยันว่าจะเก็บ และรู้ตัวว่าใช้ได้เฉพาะโพรเซสเดียว
@@ -167,7 +176,8 @@ export function createAdapter(config: AdapterConfig): UpstreamAdapter {
   const limitations = [
     ...(trackJti ? [] : ["jti_replay_not_tracked"]),
     "jwks_pinned_not_fetched",
-  ] as const;
+    ...(config.jwksSource === "fixture" ? ["jwks_is_public_test_fixture"] : []),
+  ];
 
   async function verify(token: string, ctx: { operation?: string }): Promise<VerifyResult> {
     if (typeof token !== "string" || token === "") return deny("malformed_token");

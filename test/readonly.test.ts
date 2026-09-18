@@ -2,8 +2,8 @@ import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:
 import { beforeAll, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { applySchema } from "./apply-schema";
-import gateway from "./fixtures/gateway-conformance/vectors.json";
-import gatewayJwks from "./fixtures/gateway-conformance/jwks.json";
+import gateway from "./fixtures/adapter-conformance/vectors.json";
+import gatewayJwks from "./fixtures/adapter-conformance/jwks.json";
 
 /**
  * เส้นทางอ่านอย่างเดียวต้องกันสองอย่างที่พังเงียบได้
@@ -171,7 +171,10 @@ const GATEWAY_ENV = {
   ...testEnv,
   GATEWAY_JWT_ISSUER: gateway.issuer,
   GATEWAY_JWT_AUDIENCE: gateway.audience,
+  GATEWAY_CONNECTOR_ID: gateway.connector_id,
   GATEWAY_JWKS: JSON.stringify(gatewayJwks),
+  // ประกาศตรง ๆ ว่ากุญแจชุดนี้เป็นของสาธารณะ ไม่ใช่ของ gateway จริง
+  GATEWAY_JWKS_SOURCE: "fixture",
 } as unknown as typeof testEnv;
 
 const vector = (id: string) =>
@@ -249,6 +252,55 @@ describe("เส้น JWT ของ gateway ต่อกับ route จริ�
 
   it("รหัส static เดิมยังใช้ได้ควบคู่กัน เป็น compatibility path", async () => {
     const response = await call("/mcp-readonly", RO, CONTEXT_CALL, { env: GATEWAY_ENV });
+
+    expect(response.status).toBe(200);
+    expect(await youAre(response)).toBe("test-team-readonly");
+  });
+});
+
+/**
+ * ตั้งไม่ครบต้องดังกว่าตั้งไม่เลย
+ *
+ * ถ้าตั้งสามในห้าแล้วเส้น JWT ปิดเงียบ ๆ ทุกคำขอจะตกไปทาง static bearer แล้วดูเหมือน
+ * ทำงานปกติ ทั้งที่ของที่ตั้งใจเปิดไว้ไม่ได้เปิด — เป็นความล้มเหลวที่ไม่มีใครเห็น
+ */
+describe("config ของ gateway ตั้งไม่ครบ ต้องล้มเหลวแบบมีเสียง", () => {
+  const partial = (patch: Record<string, unknown>) =>
+    ({ ...GATEWAY_ENV, ...patch }) as unknown as typeof testEnv;
+
+  it("ขาดค่าใดค่าหนึ่ง ต้องได้ 500 พร้อมบอกว่าขาดตัวไหน ไม่ใช่ 401", async () => {
+    const response = await call("/mcp-readonly", RO, CONTEXT_CALL, {
+      env: partial({ GATEWAY_CONNECTOR_ID: undefined }),
+    });
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error?: string; detail?: string };
+    expect(body.error).toBe("server_misconfigured");
+    expect(body.detail).toContain("GATEWAY_CONNECTOR_ID");
+  });
+
+  it("ไม่ประกาศว่ากุญแจมาจากไหน ต้องไม่ผ่าน", async () => {
+    const response = await call("/mcp-readonly", RO, CONTEXT_CALL, {
+      env: partial({ GATEWAY_JWKS_SOURCE: "maybe" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { detail?: string }).detail).toContain(
+      "GATEWAY_JWKS_SOURCE",
+    );
+  });
+
+  it("JWKS ที่ไม่ใช่ JSON ต้องไม่ผ่าน ไม่ใช่ปิดเส้นเงียบ ๆ", async () => {
+    const response = await call("/mcp-readonly", RO, CONTEXT_CALL, {
+      env: partial({ GATEWAY_JWKS: "ไม่ใช่ JSON" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { detail?: string }).detail).toContain("GATEWAY_JWKS");
+  });
+
+  it("ไม่ตั้งสักค่า คือปิดเส้น JWT โดยตั้งใจ static ยังใช้ได้ปกติ", async () => {
+    const response = await call("/mcp-readonly", RO, CONTEXT_CALL);
 
     expect(response.status).toBe(200);
     expect(await youAre(response)).toBe("test-team-readonly");

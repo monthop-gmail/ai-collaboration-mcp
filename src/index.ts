@@ -200,28 +200,74 @@ function auditActor(auth: ReadOnlyAuth & { ok: true }) {
 
 type ReadOnlyAuth =
   | { ok: true; identity: StaticIdentity }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; misconfigured?: undefined }
+  | { ok: false; reason?: undefined; misconfigured: string };
 
 /** โทเคนที่มีสามส่วนคั่นด้วยจุด ถือว่าผู้เรียกตั้งใจส่ง JWT ไม่ใช่รหัสร่วม */
 const looksLikeJwt = (token: string) => token.split(".").length === 3;
 
+/** ชื่อ env ทุกตัวของเส้น JWT — ตั้งครบหรือไม่ตั้งเลย ไม่มีตรงกลาง */
+const GATEWAY_VARS = [
+  "GATEWAY_JWT_ISSUER",
+  "GATEWAY_JWT_AUDIENCE",
+  "GATEWAY_JWKS",
+  "GATEWAY_CONNECTOR_ID",
+  "GATEWAY_JWKS_SOURCE",
+] as const;
+
+type GatewaySetup =
+  | { state: "off" }
+  | { state: "broken"; detail: string }
+  | { state: "ready"; adapter: ReturnType<typeof createAdapter> };
+
 /**
- * upstream adapter ของเส้นนี้ ประกอบจาก env สามค่า ขาดตัวใดตัวหนึ่งคือปิดเส้น JWT
+ * upstream adapter ของเส้นนี้ — ตั้งครบทุกค่าหรือไม่ตั้งเลย
+ *
+ * ตั้งไม่ครบแล้วปิดเส้น JWT เงียบ ๆ เป็นความล้มเหลวที่มองไม่เห็น เพราะทุกคำขอจะตกไป
+ * ทาง static bearer แล้วดูเหมือนทำงานปกติ ทั้งที่ของที่ตั้งใจเปิดไว้ไม่ได้เปิด
+ * จึงปฏิเสธคำขอพร้อมบอกว่าขาดตัวไหน แบบเดียวกับที่ `/mcp` ทำเมื่อไม่มี `MCP_AUTH_TOKEN`
+ *
+ * และไม่มีค่าสำรองสำหรับตัวใดเลย โดยเฉพาะ audience — ถ้าตกไปที่ค่าของชุดทดสอบ
+ * deployment นั้นจะยอมรับโทเคนที่ใครก็ตามที่อ่านรีโปสาธารณะหยิบไปใช้ได้ทันที
  *
  * ไม่ cache instance เพราะ `createAdapter` ไม่มีของหนักและ Worker สร้าง env ใหม่
  * ต่อคำขออยู่แล้ว — การ cache ข้าม env คือรูปเดียวกับ handler cache ที่เคยรั่วข้ามเส้น
  */
-function gatewayAdapter(env: Env) {
-  const { GATEWAY_JWT_ISSUER: issuer, GATEWAY_JWT_AUDIENCE: audience, GATEWAY_JWKS } = env;
-  if (!issuer || !audience || !GATEWAY_JWKS) return undefined;
+function gatewaySetup(env: Env): GatewaySetup {
+  const missing = GATEWAY_VARS.filter((name) => !env[name]);
+  if (missing.length === GATEWAY_VARS.length) return { state: "off" };
+  if (missing.length > 0) {
+    return { state: "broken", detail: `gateway JWT config is incomplete: missing ${missing.join(", ")}` };
+  }
+
+  const source = env.GATEWAY_JWKS_SOURCE;
+  if (source !== "fixture" && source !== "gateway") {
+    return {
+      state: "broken",
+      detail: 'GATEWAY_JWKS_SOURCE must be "fixture" or "gateway" — it declares whether the key is the public test set',
+    };
+  }
+
   let jwks: Jwks;
   try {
-    jwks = JSON.parse(GATEWAY_JWKS) as Jwks;
+    jwks = JSON.parse(env.GATEWAY_JWKS!) as Jwks;
   } catch {
-    return undefined;
+    return { state: "broken", detail: "GATEWAY_JWKS is not valid JSON" };
   }
-  // ไม่เก็บ `jti` เพราะ Worker มี isolate หลายตัว ต่างคนต่างเก็บแล้วตายเมื่อไรก็ได้
-  return createAdapter({ issuer, audience, getJwks: () => jwks, trackJti: false });
+  if (!jwks.keys?.length) return { state: "broken", detail: "GATEWAY_JWKS has no keys" };
+
+  return {
+    state: "ready",
+    // ไม่เก็บ `jti` เพราะ Worker มี isolate หลายตัว ต่างคนต่างเก็บแล้วตายเมื่อไรก็ได้
+    adapter: createAdapter({
+      issuer: env.GATEWAY_JWT_ISSUER!,
+      audience: env.GATEWAY_JWT_AUDIENCE!,
+      connectorId: env.GATEWAY_CONNECTOR_ID!,
+      getJwks: () => jwks,
+      trackJti: false,
+      jwksSource: source,
+    }),
+  };
 }
 
 /**
@@ -234,13 +280,15 @@ function gatewayAdapter(env: Env) {
  * ส่ง JWT อยู่แล้ว การตกไปทางอื่นจะบังรหัสเหตุผลที่ฝั่ง gateway ต้องใช้ตรวจข้ามระบบ
  */
 async function authorizeReadOnly(request: Request, env: Env): Promise<ReadOnlyAuth> {
+  const setup = gatewaySetup(env);
+  if (setup.state === "broken") return { ok: false, misconfigured: setup.detail };
+
   const token = bearerToken(request);
   if (!token) return { ok: false, reason: "missing_token" };
 
-  const adapter = gatewayAdapter(env);
-  if (adapter && looksLikeJwt(token)) {
+  if (setup.state === "ready" && looksLikeJwt(token)) {
     // operation ของรอบนี้เป็น `read` เสมอ เพราะเส้นนี้ไม่มี tool ที่เขียนได้เลย
-    const verified = await adapter.verify(token, { operation: "read" });
+    const verified = await setup.adapter.verify(token, { operation: "read" });
     return verified.ok
       ? { ok: true, identity: { name: verified.principal.sub, source: "jwt" } }
       : { ok: false, reason: verified.reason };
@@ -310,6 +358,12 @@ export default {
       // ตกไปให้ provider ซึ่งจะพาไปหา flow ของเส้นปกติ
       const auth = await authorizeReadOnly(request, env);
       if (auth.ok) return servePilotRoute(request, env, ctx, auth);
+
+      // ตั้งค่าไม่ครบคือความผิดของฝั่ง server ไม่ใช่ของผู้เรียก จึงเป็น 500 ไม่ใช่ 401
+      // และต้องบอกว่าขาดอะไร ไม่งั้นคนตั้งจะเห็นแต่ 401 แล้วไปไล่หาที่โทเคน
+      if (auth.misconfigured) {
+        return json({ error: "server_misconfigured", detail: auth.misconfigured }, 500);
+      }
 
       // คืนรหัสเหตุผลจากชุดปิด ไม่ใช่ข้อความอิสระ เพราะฝั่ง gateway ใช้ค่านี้ตรวจ
       // ข้ามระบบและนับในตารางบันทึก — รหัสพวกนี้ไม่ใช่ความลับและบอกเฉพาะว่าโทเคน

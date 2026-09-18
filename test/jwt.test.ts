@@ -1,7 +1,7 @@
 /**
  * รันชุด vector ของฝั่ง gateway กับ adapter ของเราจริง ๆ
  *
- * ชุดอยู่ที่ `fixtures/gateway-conformance/` ก็อปมาจาก `internal-mcp-gateway`
+ * ชุดอยู่ที่ `fixtures/adapter-conformance/` ก็อปมาจาก `internal-mcp-gateway`
  * ที่ `7dbea5f` — ห้ามแก้ไฟล์นั้นเอง เพราะถ้าแก้ ชุดจะเลิกวัดสิ่งที่อีกฝั่งวัด
  *
  * **ทำไมไม่เรียก `conformance/run.js` ของเขาตรง ๆ**
@@ -16,8 +16,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { createAdapter, CLAIM_CONTRACT, REJECT_REASONS } from "../src/jwt";
-import jwks from "./fixtures/gateway-conformance/jwks.json";
-import doc from "./fixtures/gateway-conformance/vectors.json";
+import jwks from "./fixtures/adapter-conformance/jwks.json";
+import doc from "./fixtures/adapter-conformance/vectors.json";
 
 interface Vector {
   id: string;
@@ -35,6 +35,9 @@ function adapter(trackJti: boolean) {
   return createAdapter({
     issuer: doc.issuer,
     audience: doc.audience,
+    // ค่าที่ห้าที่ harness ของฝั่ง gateway ส่งมาตั้งแต่ commit 12ade57 — ไม่แกะจาก
+    // ท้าย audience เอง เพราะการแกะทำให้ด่าน `cid` เทียบ audience กับตัวมันเอง
+    connectorId: doc.connector_id,
     getJwks: () => jwks,
     trackJti,
   });
@@ -178,6 +181,7 @@ describe("audience ของ connector ตัวเดียว", () => {
     const other = createAdapter({
       issuer: doc.issuer,
       audience: "mcp://gw.example.internal/connector/someone-else",
+      connectorId: "someone-else",
       getJwks: () => jwks,
     });
     const valid = vectors.find((v) => v.id === "valid_read")!;
@@ -185,5 +189,48 @@ describe("audience ของ connector ตัวเดียว", () => {
     const got = await other.verify(valid.token, { operation: valid.operation });
     expect(got.ok).toBe(false);
     expect(got.ok === false && got.reason).toBe("audience_mismatch");
+  });
+});
+
+describe("cid เทียบกับ connector ที่ประกาศไว้ ไม่ใช่กับตัว audience เอง", () => {
+  /**
+   * ข้อที่ฝั่ง gateway ยืนยันใน seq 21 ว่าการแกะ connector จากท้าย audience อ่อนกว่า
+   *
+   * เคสนี้ตั้ง audience ตรงกับโทเคนทุกตัวอักษร แต่ประกาศ connector เป็นอีกตัว
+   * adapter ที่แกะเอาจากท้าย audience จะได้ `collab-readonly-test` แล้วผ่านด่านนี้
+   * ส่วน adapter ที่เทียบกับค่าที่ประกาศไว้ ต้องปฏิเสธ
+   */
+  it("audience ตรง แต่ connector ที่ประกาศไว้คนละตัว ต้องไม่ผ่าน", async () => {
+    const mislabelled = createAdapter({
+      issuer: doc.issuer,
+      audience: doc.audience,
+      connectorId: "some-other-connector",
+      getJwks: () => jwks,
+    });
+    const valid = vectors.find((v) => v.id === "valid_read")!;
+
+    const got = await mislabelled.verify(valid.token, { operation: valid.operation });
+    expect(got.ok).toBe(false);
+    expect(got.ok === false && got.reason).toBe("connector_mismatch");
+  });
+
+  it("กุญแจจากชุดทดสอบสาธารณะ ต้องประกาศตัวในทะเบียนข้อจำกัด", () => {
+    const fixture = createAdapter({
+      issuer: doc.issuer,
+      audience: doc.audience,
+      connectorId: doc.connector_id,
+      getJwks: () => jwks,
+      jwksSource: "fixture",
+    });
+    const real = createAdapter({
+      issuer: doc.issuer,
+      audience: doc.audience,
+      connectorId: doc.connector_id,
+      getJwks: () => jwks,
+      jwksSource: "gateway",
+    });
+
+    expect(fixture.limitations).toContain("jwks_is_public_test_fixture");
+    expect(real.limitations).not.toContain("jwks_is_public_test_fixture");
   });
 });
