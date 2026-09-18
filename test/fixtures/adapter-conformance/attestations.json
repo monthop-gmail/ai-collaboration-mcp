@@ -1,0 +1,20 @@
+{
+  "note": "ก็อปจาก REQUIRED_ATTESTATIONS ใน adapter-conformance/run.js ของ internal-mcp-gateway — ห้ามแก้เอง",
+  "attestations": [
+    {
+      "id": "connector_id_not_derived",
+      "why": "connectorId มาจาก config โดยตรง ไม่ได้แกะจากท้าย audience",
+      "test": "ตั้ง audience ให้ตรงกับโทเคนทุกตัวอักษร แต่ประกาศ connectorId เป็นอีกตัว → ต้องได้ connector_mismatch"
+    },
+    {
+      "id": "jwks_source_declared",
+      "why": "deployment ประกาศ GATEWAY_JWKS_SOURCE และบูตไม่ผ่านเมื่อประกาศผิดชนิด",
+      "test": "ตั้ง source เป็น gateway พร้อมกุญแจที่มี kid ขึ้นต้น conformance- หรือ gw-test- → ต้องบูตไม่ผ่าน"
+    },
+    {
+      "id": "config_incomplete_fails_boot",
+      "why": "ตั้งค่าไม่ครบต้องบูตไม่ผ่าน ไม่ใช่ปิดเส้น JWT เงียบ ๆ แล้วตกไปทางเดิม",
+      "test": "ถอดตัวแปรออกหนึ่งตัว → ต้องได้ 500 ที่บอกว่าขาดตัวไหน ไม่ใช่ 401 และไม่ใช่ทำงานปกติ"
+    }
+  ]
+}

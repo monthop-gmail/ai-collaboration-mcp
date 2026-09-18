@@ -4,6 +4,9 @@ import worker from "../src/index";
 import { applySchema } from "./apply-schema";
 import gateway from "./fixtures/adapter-conformance/vectors.json";
 import gatewayJwks from "./fixtures/adapter-conformance/jwks.json";
+import gwTestJwks from "./fixtures/gateway-test-runtime/jwks.json";
+import required_ from "./fixtures/adapter-conformance/attestations.json";
+import { createAdapter, jwksSourceMismatch } from "../src/jwt";
 
 /**
  * เส้นทางอ่านอย่างเดียวต้องกันสองอย่างที่พังเงียบได้
@@ -304,5 +307,67 @@ describe("config ของ gateway ตั้งไม่ครบ ต้อง�
 
     expect(response.status).toBe(200);
     expect(await youAre(response)).toBe("test-team-readonly");
+  });
+});
+
+/**
+ * สามข้อที่ชุดกลางทดสอบแทนไม่ได้ และต้องประกาศมาเอง
+ *
+ * ชุดกลางรับ config มาจากไฟล์ vector เอง จะสร้าง adapter ด้วยค่าที่ไม่ตรงกับไฟล์
+ * ก็เป็นการทดสอบตัวเองมากกว่าทดสอบ adapter — แต่ปล่อยเงียบไม่ได้ เพราะ adapter ที่
+ * แกะ connector จากท้าย audience จะผ่าน 24 ข้อ **เท่ากับ** adapter ที่ไม่ได้แกะ
+ * ทั้งที่อ่อนกว่าจริง
+ *
+ * **ไม่ประกาศด้วยค่าที่พิมพ์ไว้** — ทุกข้อถูกรันพิสูจน์ในรอบเดียวกับที่ประกาศ
+ * เพราะการประกาศที่ไม่มีอะไรรองรับ คือสิ่งเดียวกับที่ช่องนี้ถูกสร้างมาเพื่อกัน
+ */
+describe("attestation ที่ต้องประกาศให้ฝั่ง gateway", () => {
+  const validRead = vector("valid_read");
+
+  /** พิสูจน์ทีละข้อแล้วคืนผล — ค่าที่ประกาศจึงเป็นผลของการรัน ไม่ใช่ค่าที่ตั้งไว้ */
+  async function prove(): Promise<Record<string, boolean>> {
+    // 1 — connectorId มาจาก config ไม่ได้แกะจากท้าย audience
+    const mislabelled = createAdapter({
+      issuer: gateway.issuer,
+      audience: gateway.audience,
+      connectorId: "some-other-connector",
+      getJwks: () => gatewayJwks,
+    });
+    const got = await mislabelled.verify(validRead, { operation: "read" });
+
+    // 2 — ประกาศชนิดกุญแจผิด ต้องไม่ผ่าน ทั้งสามทิศ
+    const sourceGuard =
+      jwksSourceMismatch(gatewayJwks, "gateway") !== undefined &&
+      jwksSourceMismatch(gwTestJwks, "gateway") !== undefined &&
+      jwksSourceMismatch(gwTestJwks, "fixture") !== undefined;
+
+    // 3 — ตั้งค่าไม่ครบต้องได้ 500 ที่บอกว่าขาดตัวไหน ไม่ใช่ 401 และไม่ใช่ทำงานปกติ
+    const broken = await call("/mcp-readonly", RO, CONTEXT_CALL, {
+      env: { ...GATEWAY_ENV, GATEWAY_CONNECTOR_ID: undefined } as unknown as typeof testEnv,
+    });
+    const body = (await broken.json()) as { error?: string; detail?: string };
+
+    return {
+      connector_id_not_derived: got.ok === false && got.reason === "connector_mismatch",
+      jwks_source_declared: sourceGuard,
+      config_incomplete_fails_boot:
+        broken.status === 500 &&
+        body.error === "server_misconfigured" &&
+        (body.detail ?? "").includes("GATEWAY_CONNECTOR_ID"),
+    };
+  }
+
+  it("รายการที่ต้องประกาศ ตรงกับของต้นทางไม่ขาดไม่เกิน", async () => {
+    const required = required_.attestations.map((a) => a.id).sort();
+    expect(Object.keys(await prove()).sort()).toEqual(required);
+  });
+
+  it("ทั้งสามข้อพิสูจน์ผ่าน จึงประกาศได้", async () => {
+    const proved = await prove();
+    const failed = Object.entries(proved)
+      .filter(([, ok]) => !ok)
+      .map(([id]) => id);
+
+    expect(failed, `ประกาศไม่ได้: ${failed.join(", ")}`).toEqual([]);
   });
 });
