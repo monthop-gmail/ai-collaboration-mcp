@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { CONTRACT_VERSION, handoffReminder, registerTool, run } from "../src/tool-kit";
+import { CONTRACT_VERSION, actedAs, handoffReminder, registerTool, run } from "../src/tool-kit";
 
 /**
  * ข้อความนี้คือสิ่งเดียวที่กัน agent เล่าว่า "ส่งต่อแล้ว" ทั้งที่แค่ตั้งผู้รับผิดชอบ
@@ -94,5 +94,63 @@ describe("ตารางยังไม่ถูกสร้าง", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain("something else entirely");
     expect(result.content[0]!.text).not.toContain("db:remote");
+  });
+});
+
+/**
+ * Phase 1 ข้อ B ของ vNext — task-16e0acde
+ *
+ * โต๊ะนี้มีเคสจริงสี่ครั้งที่ผู้ลงมือไม่ใช่ผู้ที่บันทึกระบุ และทุกครั้งไม่มีอะไรผิด
+ * สิ่งที่ผิดคือบันทึกอ่านแล้วเหมือนผู้ที่ถูกระบุเป็นคนทำ
+ */
+describe("ใครลงมือ เทียบกับใครที่บันทึกระบุ", () => {
+  it("ตรงกัน — รายงานว่าไม่ได้ทำแทน และไม่มีข้อความเตือน", () => {
+    const got = actedAs("monthop-gmail/agent-platform", "monthop-gmail/agent-platform");
+
+    expect(got.delegated).toBe(false);
+    expect(got.addressed_to).toBe("monthop-gmail/agent-platform");
+    expect(got.acted_by).toBe("monthop-gmail/agent-platform");
+    expect(got).not.toHaveProperty("note");
+  });
+
+  /** เคสจริง ho-0df9ca9c จ่าหน้าถึง itops-mcp-hub แต่ Cursor เป็นคนกดรับ */
+  it("ไม่ตรงกัน — รายงานทั้งสองชื่อพร้อมข้อความที่บอกว่าทำได้ ไม่ใช่ว่าผิด", () => {
+    const got = actedAs("monthop-champaruang/itops-mcp-hub", "Cursor");
+
+    expect(got.delegated).toBe(true);
+    expect(got.addressed_to).toBe("monthop-champaruang/itops-mcp-hub");
+    expect(got.acted_by).toBe("Cursor");
+    expect(got.note).toContain("monthop-champaruang/itops-mcp-hub");
+    expect(got.note).toContain("Cursor");
+    expect(got.note).toContain("allowed");
+  });
+
+  /**
+   * ไม่มีเจ้าของ ต้องแยกออกจากมีเจ้าของแล้วตรงกัน — ผู้อ่านแยกได้จาก addressed_to
+   * ที่อยู่ในผลลัพธ์เดียวกัน ไม่ต้องเดาจาก delegated อย่างเดียว
+   */
+  it("ใบไม่มีเจ้าของ — ไม่ใช่การทำแทน และบอกได้ว่าไม่มีใครถูกระบุ", () => {
+    for (const empty of [null, undefined, "", "   "]) {
+      const got = actedAs(empty, "Cursor");
+      expect(got.delegated).toBe(false);
+      expect(got.addressed_to).toBeNull();
+      expect(got.acted_by).toBe("Cursor");
+    }
+  });
+
+  it("ไม่รู้ว่าใครลงมือ — ไม่เดาว่าตรงหรือไม่ตรง", () => {
+    const got = actedAs("monthop-gmail/ai-collaboration-mcp", null);
+
+    expect(got.delegated).toBe(false);
+    expect(got.acted_by).toBeNull();
+    expect(got.addressed_to).toBe("monthop-gmail/ai-collaboration-mcp");
+  });
+
+  it("มีฟิลด์เสมอ ไม่ใช่โผล่เฉพาะตอนไม่ตรง", () => {
+    for (const got of [actedAs("a", "a"), actedAs("a", "b"), actedAs(null, "b")]) {
+      expect(got).toHaveProperty("addressed_to");
+      expect(got).toHaveProperty("acted_by");
+      expect(got).toHaveProperty("delegated");
+    }
   });
 });

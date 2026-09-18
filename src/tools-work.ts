@@ -22,7 +22,7 @@ import {
   type DecisionStatus,
   type TaskStatus,
 } from "./db-work";
-import { Limit, Workspace, handoffReminder, registerTool, run } from "./tool-kit";
+import { Limit, Workspace, actedAs, handoffReminder, registerTool, run } from "./tool-kit";
 
 const Detail = z.string().describe("Full reasoning or context. Be specific — this is what a participant who was not present will read.");
 
@@ -304,6 +304,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           status: task.status,
           assigned_to: task.assigned_to,
           updated_by: task.updated_by,
+          acted_as: actedAs(task.assigned_to, task.updated_by),
           updated_at: task.updated_at,
           // เช่นเดียวกับ create_task — บอกตรง ๆ ว่ามี handoff รออยู่หรือไม่ ไม่ใช่เงียบ
           handoff: await getCurrentHandoffId(env.DB, task.id),
@@ -459,6 +460,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           task_id: task.id,
           task_status: task.status,
           task_assigned_to: task.assigned_to,
+          acted_as: actedAs(handoff.to_whom, handoff.accepted_by),
         };
       }),
   );
