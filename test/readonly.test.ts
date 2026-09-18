@@ -427,3 +427,43 @@ describe("บรรทัดบันทึกของ upstream", () => {
     expect(Object.keys(line).filter((k) => !allowed.includes(k))).toEqual([]);
   });
 });
+
+/**
+ * ยืนยันว่าเราตอบรูปไหน — ไม่ใช่เพื่อล็อกค่า แต่เพื่อให้การเปลี่ยนมองเห็นได้
+ *
+ * ภัยข้อ 21 ของฝั่ง gateway เกิดจากเขาประกาศ `Accept` รับสองรูปแต่อ่านได้รูปเดียว
+ * ส่วนฝั่งเราเป็นอีกครึ่งของเรื่องเดียวกัน — เทสต์ทั้งหมดอ่านผลด้วยตัวช่วยที่แกะ
+ * SSE frame มาตั้งแต่ไฟล์แรก จึงไม่เคยมีเทสต์ไหนยืนยันว่า content-type ที่เราตอบ
+ * คืออะไร ถ้าวันหนึ่งเปลี่ยนไปตอบ JSON ล้วน เทสต์เดิมจะยังเขียวทั้งชุด
+ *
+ * ไม่ผูกว่าต้องเป็นรูปไหนในสัญญา เพราะ MCP อนุญาตทั้งสองและการบังคับจะแคบกว่าสเปก
+ * สิ่งที่ผูกคือ **ต้องมีใครสักคนวัด** ซึ่งทำให้การเปลี่ยนเป็นการเปลี่ยนที่มีคนเห็น
+ *
+ * ตกลงกับ trueforge ที่ dis-514ae7a7 seq 38–39 · ประกาศเป็น `response_format_asserted`
+ */
+describe("รูปของคำตอบที่เราส่งออกไป", () => {
+  it("เส้นอ่านตอบ text/event-stream และถ้าเปลี่ยนต้องมีคนเห็น", async () => {
+    const response = await call("/mcp-readonly", RO, CONTEXT_CALL);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+  });
+
+  it("เส้นปกติตอบรูปเดียวกัน ไม่ได้ต่างกันตามเส้นทาง", async () => {
+    const response = await call("/mcp", RW, CONTEXT_CALL);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+  });
+
+  /**
+   * คำตอบที่ไม่ใช่ผลของ tool เป็น JSON ล้วน — คนละเรื่องกับ transport ของ MCP
+   * แยกไว้ให้ชัดเพราะถ้าไม่แยก คนอ่านจะเข้าใจว่าทุกคำตอบเป็น SSE
+   */
+  it("คำปฏิเสธเป็น JSON ไม่ใช่ SSE", async () => {
+    const response = await call("/mcp-readonly", "ไม่ใช่รหัสจริง", CONTEXT_CALL);
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("content-type")).toContain("application/json");
+  });
+});

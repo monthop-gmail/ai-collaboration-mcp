@@ -164,7 +164,6 @@ async function servePilotRoute(
     // คำขอที่ไม่ใช่ JSON ไม่ต้องบันทึกอะไร ปล่อยให้ handler จัดการต่อ
   }
 
-  const started = Date.now();
   const response = await serveMcp(request, env, ctx, true, auth.identity);
 
   if (method === "tools/call" || method === "tools/list") {
@@ -178,7 +177,18 @@ async function servePilotRoute(
         method,
         tool,
         status: response.status,
-        ms: Date.now() - started,
+        // ไม่มีช่องเวลาที่ใช้ เพราะวัดไม่ได้จริงบน Worker
+        //
+        // เคยมี `ms` อยู่ตรงนี้ คำนวณจาก Date.now() คร่อม serveMcp · เก็บ log จริง
+        // 36 บรรทัดจาก deployment แล้วได้ 0 ทั้ง 36 บรรทัด
+        //
+        // สาเหตุคือ Worker แช่นาฬิกาไว้และเลื่อนเฉพาะหลัง I/O เสร็จ ส่วนคำตอบของ
+        // เส้นนี้เป็นสตรีม จึงคืน Response ก่อนที่ body จะถูกเขียน เวลาที่อ่านได้
+        // สองครั้งจึงเป็นค่าเดียวกันเสมอ
+        //
+        // ช่องที่อ่านแล้วเหมือนเป็นการวัด แต่ไม่ได้วัดอะไรเลย แย่กว่าไม่มีช่องนั้น
+        // เพราะคนอ่านจะเชื่อว่ามีข้อมูลอยู่ — เป็นตระกูลเดียวกับ ops ที่ไม่มีใครตรวจ
+        // cid ที่ไม่มีใครตรวจ และ session ที่ไม่มีโค้ดไหนอ่าน ต่างกันแค่ข้อนี้เป็นของเรา
         ...auditActor(auth),
       }),
     );
