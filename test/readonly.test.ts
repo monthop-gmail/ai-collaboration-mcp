@@ -502,3 +502,67 @@ describe("รูปของคำตอบที่เราส่งออก�
     expect(response.headers.get("content-type")).toContain("application/json");
   });
 });
+
+/**
+ * ฟีเจอร์ของสองสายที่พัฒนาแยกกัน มาเจอกันครั้งแรกตรงนี้
+ *
+ * `health` กับ `quiet_for_days` ถูกเขียนบน branch ที่ไม่มีเส้น `/mcp-readonly` อยู่เลย
+ * ส่วนเส้นนี้ถูกเขียนบน branch ที่ยังไม่มีสองอย่างนั้น · เทสต์ของทั้งสองฝั่งเขียวครบ
+ * ตอนอยู่แยกกัน ซึ่งพิสูจน์ไม่ได้เลยว่ารวมกันแล้วเป็นอย่างไร
+ *
+ * `devfactory-core` เขียนไว้ที่ `dis-b492ed20` ว่าสามรอบล่าสุดของ ecosystem นี้ ของที่
+ * เจอมาจากการที่อีกทีมเอาของจริงไปรันแล้วชน ไม่ได้มาจากการอ่านสัญญาละเอียดขึ้น และ
+ * ตัวร่วมคือ **fixture ที่เล็กกว่าของจริง** — สองสายที่ไม่เคยถูกรันรวมกันเป็นรูปเดียวกัน
+ */
+describe("ภาพรวมบนเส้นอ่าน ได้ของชุดเดียวกับเส้นปกติ", () => {
+  interface Overview {
+    open_items: { health: Record<string, unknown> };
+    quiet_discussions: { threshold_days: number | null; hidden: number };
+  }
+
+  async function context(args: Record<string, unknown>): Promise<Overview> {
+    const body = await payload(
+      await call("/mcp-readonly", RO, {
+        jsonrpc: "2.0",
+        id: 42,
+        method: "tools/call",
+        params: { name: "get_workspace_context", arguments: args },
+      }),
+    );
+    const text = (body.result as { content?: Array<{ text?: string }> })?.content?.[0]?.text;
+    return JSON.parse(text ?? "{}") as Overview;
+  }
+
+  it("health มาถึงเส้นอ่านครบทุกช่อง ไม่ได้หายไปเพราะเส้นทาง", async () => {
+    const result = await context({ limit: 1 });
+
+    expect(Object.keys(result.open_items.health).sort()).toEqual([
+      "delegated",
+      "handoffs",
+      "open_tasks",
+      "unseen_targets",
+    ]);
+  });
+
+  it("ตัวกรองกระทู้ทำงานบนเส้นอ่านด้วย และไม่กรองเมื่อไม่ได้ขอ", async () => {
+    expect((await context({ limit: 1 })).quiet_discussions).toEqual({
+      threshold_days: null,
+      hidden: 0,
+    });
+    expect((await context({ limit: 1, quiet_for_days: 30 })).quiet_discussions.threshold_days).toBe(
+      30,
+    );
+  });
+
+  /**
+   * ข้อนี้คือเหตุผลที่ต้องมีเทสต์ตรงนี้จริง ๆ — เส้นอ่านซ่อน tool ที่เขียนได้ และ
+   * `health` เป็นของใหม่ที่เพิ่งโผล่ในผลลัพธ์ ถ้ามันพาชื่อ tool ที่ถูกซ่อนกลับเข้ามา
+   * โดยอ้อม การซ่อนก็ไม่มีความหมาย · วันนี้ไม่พา และอยากให้ยังไม่พาต่อไป
+   */
+  it("ของใหม่ในผลลัพธ์ไม่ได้พา tool ที่ถูกซ่อนกลับเข้ามา", async () => {
+    const result = await context({ limit: 1 });
+    const text = JSON.stringify(result.open_items.health);
+
+    for (const tool of WRITE_TOOLS) expect(text).not.toContain(tool);
+  });
+});
