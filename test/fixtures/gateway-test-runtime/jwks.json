@@ -1,0 +1,13 @@
+{
+  "note": "public JWKS ของ gateway TEST runtime — ไม่ใช่ความลับ · kid ขึ้นต้น gw-test- เพื่อให้การ์ดจับได้ถ้ามีคนเอาไปตั้งเป็นของจริง",
+  "keys": [
+    {
+      "kty": "RSA",
+      "n": "vCboCp23-YotAfaHxYaaDG2_p7Cy7iOWuA4rFZAoPR-FQCeWzSrwneLoLHQc-bdyVmTQBJxukvspUUul4VpXM6cC4D8iieAWaGVrrGGJ4gyTNOooWc9p7iECLcpauI1jBk9GnEwgoBtNNpohoP0pUo0i7GbDLv0pZyiH5-GjXUT-b7FIPZhTU1oIWEkxLgQbkYPR9t3kFPpp0ML3wk2wgAtgtE2AmD_6CGfwObQojCPXIipxgvZoGkJtjzWMPpoNxqUOn1Fkyh0MRWWf7LySdR0BS0SNs5ri1IO6jhXxU4u8Z7om7vMjiGKbph-P_ehXhbypGo2ByJ2zTntrhJNucw",
+      "e": "AQAB",
+      "kid": "gw-test-1",
+      "alg": "RS256",
+      "use": "sig"
+    }
+  ]
+}
