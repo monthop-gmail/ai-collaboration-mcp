@@ -23,6 +23,7 @@ import {
   REJECT_REASONS,
 } from "../src/jwt";
 import gwTestJwks from "./fixtures/gateway-test-runtime/jwks.json";
+import runtimeJwks from "./fixtures/gateway-runtime/jwks.json";
 import jwks from "./fixtures/adapter-conformance/jwks.json";
 import doc from "./fixtures/adapter-conformance/vectors.json";
 
@@ -287,5 +288,58 @@ describe("ประกาศชนิดของกุญแจต้องต�
     });
     expect(a.limitations).toContain("jwks_is_gateway_test_key");
     expect(a.limitations).not.toContain("jwks_is_public_test_fixture");
+  });
+});
+
+/**
+ * กุญแจของ gateway ตัวจริงที่ deploy แล้ว — วัดสองข้อของ runbook ข้อ 8 ล่วงหน้า
+ *
+ * `trueforge` deploy ขึ้น `internal-mcp-gateway-test.monthop-gmail.workers.dev` เมื่อ
+ * 18 ก.ย. (commit `66bcad7` ของ `internal-mcp-gateway`) และเผยแพร่ JWKS เป็นสาธารณะ
+ * เราจึงดึงมาวัดฝั่งเราได้เลย **โดยไม่ต้องรอให้เส้นทางยิงถึงกันได้ก่อน** ซึ่งตอนนี้
+ * ยังยิงไม่ถึงเพราะ Worker ยิง Worker ในบัญชีเดียวกันโดน Cloudflare บล็อก (1042)
+ *
+ * ข้อที่สองสำคัญกว่าข้อแรก — **การพิสูจน์ว่ากุญแจใหม่ใช้ได้ ไม่ได้พิสูจน์ว่ากุญแจเก่า
+ * ใช้ไม่ได้แล้ว** ต้องยิงด้วยของเก่าแล้วดูว่าถูกปฏิเสธจริง เป็นทิศที่สองของภัยข้อ 9
+ */
+describe("กุญแจของ gateway ตัวจริง", () => {
+  const PRIVATE_FIELDS = ["d", "p", "q", "dp", "dq", "qi"] as const;
+
+  it("ที่เผยแพร่ออกมาเป็นกุญแจสาธารณะล้วน ไม่มีส่วนที่ต้องปิด", () => {
+    for (const key of runtimeJwks.keys as Array<Record<string, unknown>>) {
+      for (const field of PRIVATE_FIELDS) {
+        expect(key, `กุญแจ ${String(key.kid)} มีช่อง ${field}`).not.toHaveProperty(field);
+      }
+    }
+  });
+
+  it("ประกาศเป็น gateway ได้ เพราะไม่มีเครื่องหมายของกุญแจทดสอบ", () => {
+    expect(jwksSourceMismatch(runtimeJwks, "gateway")).toBeUndefined();
+  });
+
+  it("ประกาศเป็น fixture ไม่ได้ ของจริงจะถูกเรียกว่าของทดสอบไม่ได้", () => {
+    expect(jwksSourceMismatch(runtimeJwks, "fixture")).toBeTruthy();
+  });
+
+  /**
+   * ข้อนี้คือการยืนยันล่วงหน้าว่า cutover จะไม่ทิ้งประตูหลังไว้
+   *
+   * `valid_read` มี `exp` ไกลถึงปี 2100 และอยู่ในรีโปสาธารณะ ใครก็หยิบไปยิงได้
+   * หลังเปลี่ยนมาใช้กุญแจ runtime มันต้องตายทันที ไม่ใช่ยังใช้ได้เงียบ ๆ
+   */
+  it("โทเคน fixture ที่ยังไม่หมดอายุ ตายทันทีเมื่อ JWKS เป็นของ runtime", async () => {
+    const validRead = vectors.find((v) => v.id === "valid_read")!;
+    const afterCutover = createAdapter({
+      issuer: doc.issuer,
+      audience: doc.audience,
+      connectorId: doc.connector_id,
+      getJwks: () => runtimeJwks,
+      jwksSource: "gateway",
+    });
+
+    const got = await afterCutover.verify(validRead.token, { operation: "read" });
+
+    expect(got.ok).toBe(false);
+    expect(got.ok === false && got.reason).toBe("unknown_kid");
   });
 });
