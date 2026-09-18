@@ -940,10 +940,234 @@ export interface OpenItems {
     in_progress: { tasks: WaitingTask[]; total: number };
     total: number;
   };
+  /**
+   * สภาพของโต๊ะทั้งโต๊ะ — คนละคำถามกับ `waiting_for_you` ซึ่งเป็นเรื่องของผู้เรียก
+   *
+   * แยกคีย์กันเพราะสองอย่างนี้ตอบคนละคำถาม และถ้าปนกัน ของที่ไม่ใช่ของเราจะอ่าน
+   * เหมือนเป็นงานที่เราต้องทำ
+   */
+  health: WorkspaceHealth;
 }
 
 /** จำกัดรายการที่ยกมาแสดง ที่เหลือดูได้จาก get_tasks / get_handoffs */
 const WAITING_PREVIEW = 10;
+
+/* ── สภาพของโต๊ะทั้งโต๊ะ ไม่ใช่เฉพาะของผู้เรียก ───────────────────────── */
+
+export interface DelegatedHandoff {
+  handoff_id: string;
+  task_id: string;
+  addressed_to: string;
+  acted_by: string;
+}
+
+export interface DelegatedTask {
+  task_id: string;
+  title: string;
+  addressed_to: string;
+  acted_by: string;
+}
+
+export interface UnseenTarget {
+  name: string;
+  pending_handoffs: number;
+  oldest: string;
+  /**
+   * ถ้อยคำที่ยกมาใช้ได้ตรง ๆ โดยไม่ต้องตีความต่อ
+   *
+   * เขียนเป็นข้อเท็จจริงที่สังเกตได้ ไม่ใช่ข้อสรุปว่าชื่อนี้ไม่มีตัวตน เพราะชื่ออย่าง
+   * `Cursor` ในโต๊ะนี้เป็นป้ายเดียวที่ทำงานหลายบทบาท การบอกว่า "ไม่รู้จัก" จะหลอก
+   * คนอ่าน — Cursor ทักข้อนี้ไว้เองที่ dis-c6095786 seq 9 ข้อ 4
+   */
+  evidence: string;
+}
+
+export interface WorkspaceHealth {
+  /** handoff ที่ยังไม่มีใครรับ ของทั้งโต๊ะ แยกตามอายุ */
+  handoffs: { waiting: number; stale: number; inactive: number };
+  /**
+   * ผู้ลงมือจริงไม่ตรงกับผู้ที่บันทึกระบุ — รายงาน ไม่ใช่ห้าม
+   *
+   * คู่กับฟิลด์ `acted_as` ที่ `accept_handoff` กับ `update_task` คืนตอนลงมือ
+   * ต่างกันตรงที่อันนั้นบอกคนที่กำลังทำ ส่วนอันนี้บอกคนที่มาอ่านทีหลังว่ามีกี่ใบ
+   */
+  delegated: { handoffs: DelegatedHandoff[]; tasks: DelegatedTask[]; total: number };
+  /**
+   * งานเปิดที่จอดไว้โดยตั้งใจ แยกจากงานเปิดที่ยังไม่มีใครเริ่ม
+   *
+   * สองอย่างนี้ต้องการการกระทำคนละแบบ แต่รวมกันอยู่ในยอด `open` ยอดเดียวมาตลอด
+   * ผลคือยอดที่ควรจะฟ้องกลับฟ้องผิดทุกวันจนไม่มีใครดู
+   */
+  open_tasks: { unstarted: number; parked: { tasks: WaitingTask[]; total: number } };
+  /** ปลายทางของ handoff ที่ค้าง ซึ่งชื่อนั้นไม่เคยลงมืออะไรในโต๊ะนี้เลย */
+  unseen_targets: UnseenTarget[];
+}
+
+/**
+ * คำที่ต้องขึ้นต้น title หรือ detail เพื่อให้ถือว่าจอดไว้โดยตั้งใจ
+ *
+ * เป็น convention ไม่ใช่สคีมา เพราะสถานะจริงต้องรอ contract ถัดไป และ Cursor เสนอ
+ * ไว้ที่ dis-c6095786 seq 9 ข้อ 3 ว่าอย่ารอ แล้วปล่อยให้ยอดฟ้องผิดทุกวันระหว่างนั้น
+ *
+ * ตรวจแบบขึ้นต้นเท่านั้น ไม่ใช่หาคำนี้ที่ไหนก็ได้ในข้อความ เพราะใบที่เขียนว่า
+ * "ห้ามจอดใบนี้" จะถูกนับเป็นจอดทันที ซึ่งแย่กว่าไม่มีตัวนับ — ราคาของเส้นที่คมคือ
+ * ใบที่จอดจริงแต่ไม่ได้ใช้คำนี้จะไม่ถูกนับ และนั่นเป็นสิ่งที่แก้ได้ด้วยการแก้ใบ
+ * ส่วนการเดาผิดแก้ไม่ได้ด้วยอะไรเลย
+ */
+const PARKED_MARK = "PARKED";
+
+const IS_PARKED = `(upper(substr(ltrim(detail), 1, ${PARKED_MARK.length})) = '${PARKED_MARK}'
+      OR upper(substr(ltrim(title),  1, ${PARKED_MARK.length})) = '${PARKED_MARK}')`;
+
+/**
+ * ชื่อที่ **เคยลงมืออะไรสักอย่าง** ในโต๊ะนี้
+ *
+ * เกณฑ์คือการกระทำที่ทิ้งร่องรอยไว้ ไม่ใช่การถูกเอ่ยถึง — `assigned_to` กับ `to_whom`
+ * เป็นค่าที่คนอื่นพิมพ์ ใช้เป็นหลักฐานว่ามีตัวตนไม่ได้ ไม่งั้นทุกชื่อที่ถูกส่งงานไป
+ * จะยืนยันตัวเองด้วยการถูกส่งงาน
+ */
+/**
+ * ชื่อที่ **เคยลงมืออะไรสักอย่าง** ในโต๊ะนี้ — แยกเป็นคิวรีสั้น ๆ แล้วรวมใน TypeScript
+ *
+ * เกณฑ์คือการกระทำที่ทิ้งร่องรอยไว้ ไม่ใช่การถูกเอ่ยถึง — `assigned_to` กับ `to_whom`
+ * เป็นค่าที่คนอื่นพิมพ์ ใช้เป็นหลักฐานว่ามีตัวตนไม่ได้ ไม่งั้นทุกชื่อที่ถูกส่งงานไป
+ * จะยืนยันตัวเองด้วยการถูกส่งงาน
+ *
+ * ที่ไม่รวมเป็น UNION เดียวเพราะ SQLite ของ D1 จำกัดจำนวนท่อนใน compound SELECT
+ * ไว้ต่ำกว่าที่คาด — รวมหกท่อนแล้วได้ `too many terms in compound SELECT` ซึ่งเป็น
+ * ข้อผิดพลาดตอนรัน ไม่ใช่ตอน build จึงจับได้ก็ต่อเมื่อมีเทสต์ที่ยิงของจริง
+ */
+const ACTOR_QUERIES = [
+  `SELECT m.author_name AS name
+     FROM messages m JOIN discussions d ON d.id = m.discussion_id
+    WHERE d.workspace_id = ?1
+    UNION SELECT created_by FROM discussions WHERE workspace_id = ?1`,
+  `SELECT created_by AS name FROM tasks WHERE workspace_id = ?1
+    UNION SELECT updated_by FROM tasks WHERE workspace_id = ?1 AND updated_by IS NOT NULL`,
+  `SELECT h.accepted_by AS name
+     FROM handoffs h JOIN tasks t ON t.id = h.task_id
+    WHERE t.workspace_id = ?1 AND h.accepted_by IS NOT NULL
+    UNION SELECT h.from_name
+     FROM handoffs h JOIN tasks t ON t.id = h.task_id
+    WHERE t.workspace_id = ?1`,
+];
+
+/**
+ * สภาพของโต๊ะที่อ่านได้จากการเรียกครั้งเดียว
+ *
+ * ตามที่ Cursor วางขั้นต่ำไว้ที่ dis-c6095786 seq 9 ข้อ 2 — สี่อย่างนี้เป็นของที่
+ * วันนี้ต้องไล่อ่านหลาย tool ถึงจะเห็น หรือไม่เห็นเลย
+ *
+ * **ทุกช่องเป็นข้อเท็จจริง ไม่ใช่คำตัดสิน** ไม่มีคำว่าผิดปกติ ไม่มีคะแนน ไม่มีคำแนะนำ
+ * เพราะเกณฑ์ว่าอะไรควรเป็นห่วงขึ้นกับบริบทที่ระบบไม่มี — ใบที่ค้างสามวันอาจปกติ
+ * สำหรับงานที่รอของ และผิดปกติมากสำหรับงานที่มีคนรอ
+ */
+export async function readWorkspaceHealth(
+  db: D1Database,
+  workspaceId: string,
+): Promise<WorkspaceHealth> {
+  const cutoff = staleCutoff();
+  const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
+
+  const [ages, delegatedHandoffs, delegatedTasks, openTasks, targets, ...actorRows] =
+    await db.batch([
+    db
+      .prepare(
+        `SELECT CASE WHEN h.created_at < ?2 THEN 'stale' ELSE 'waiting' END AS state,
+                COUNT(*) AS n
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND NOT ${inactive}
+          GROUP BY state
+         UNION ALL
+         SELECT 'inactive', COUNT(*)
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND ${inactive}`,
+      )
+      .bind(workspaceId, cutoff),
+    db
+      .prepare(
+        `SELECT h.id AS handoff_id, h.task_id,
+                h.to_whom AS addressed_to, h.accepted_by AS acted_by
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'accepted'
+            AND h.accepted_by IS NOT NULL
+            AND lower(h.accepted_by) != lower(h.to_whom)
+          ORDER BY h.accepted_at DESC`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT id AS task_id, title, assigned_to AS addressed_to, updated_by AS acted_by
+           FROM tasks
+          WHERE workspace_id = ?1
+            AND assigned_to IS NOT NULL AND updated_by IS NOT NULL
+            AND lower(updated_by) != lower(assigned_to)
+          ORDER BY updated_at DESC`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT id, title, status, ${IS_PARKED} AS parked
+           FROM tasks WHERE workspace_id = ?1 AND status = 'open'
+          ORDER BY created_at`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT h.to_whom AS name, COUNT(*) AS pending_handoffs, MIN(h.created_at) AS oldest
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND NOT ${inactive}
+          GROUP BY lower(h.to_whom)
+          ORDER BY oldest`,
+      )
+      .bind(workspaceId),
+    ...ACTOR_QUERIES.map((sql) => db.prepare(sql).bind(workspaceId)),
+  ]);
+
+  const byState = new Map(
+    (ages.results as Array<{ state: string; n: number }>).map((r) => [r.state, r.n]),
+  );
+
+  const open = openTasks.results as Array<WaitingTask & { parked: number }>;
+  const parked = open
+    .filter((t) => t.parked === 1)
+    .map(({ parked: _mark, ...task }) => task);
+
+  const handoffs = delegatedHandoffs.results as DelegatedHandoff[];
+  const tasks = delegatedTasks.results as DelegatedTask[];
+
+  const acted = new Set(
+    actorRows
+      .flatMap((r) => r.results as Array<{ name: string | null }>)
+      .map((r) => r.name?.toLowerCase())
+      .filter((name): name is string => name !== undefined),
+  );
+
+  return {
+    handoffs: {
+      waiting: byState.get("waiting") ?? 0,
+      stale: byState.get("stale") ?? 0,
+      inactive: byState.get("inactive") ?? 0,
+    },
+    delegated: {
+      handoffs: handoffs.slice(0, WAITING_PREVIEW),
+      tasks: tasks.slice(0, WAITING_PREVIEW),
+      total: handoffs.length + tasks.length,
+    },
+    open_tasks: {
+      unstarted: open.length - parked.length,
+      parked: { tasks: parked.slice(0, WAITING_PREVIEW), total: parked.length },
+    },
+    unseen_targets: (
+      targets.results as Array<{ name: string; pending_handoffs: number; oldest: string }>
+    )
+      .filter((row) => !acted.has(row.name.toLowerCase()))
+      .map((row) => ({
+        ...row,
+        evidence: "ชื่อนี้ไม่เคยโพสต์ ไม่เคยรับ handoff และไม่เคยแก้ใบใน workspace นี้",
+      })),
+  };
+}
 
 /**
  * สรุปของที่ยังค้างใน workspace รวมของที่รอผู้เรียกอยู่โดยเฉพาะ
@@ -974,7 +1198,8 @@ export async function readOpenItems(
   const cutoff = staleCutoff();
   const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
 
-  const [counts, taskCounts, plan, myHandoffs, myTasks] = await db.batch([
+  const [[counts, taskCounts, plan, myHandoffs, myTasks], health] = await Promise.all([
+    db.batch([
     db
       .prepare(
         `SELECT 'decisions' AS k, COUNT(*) AS n
@@ -1027,6 +1252,8 @@ export async function readOpenItems(
           ORDER BY created_at`,
       )
       .bind(workspaceId, myName),
+    ]),
+    readWorkspaceHealth(db, workspaceId),
   ]);
 
   const byKey = new Map(
@@ -1069,5 +1296,6 @@ export async function readOpenItems(
       },
       total: unacceptedTotal + inProgress.length,
     },
+    health,
   };
 }

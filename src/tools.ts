@@ -164,9 +164,14 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         "discussions, who has taken part, what is still open, and — under " +
         "'waiting_for_you' — the work addressed to you by name, split into " +
         "'unaccepted' (handoffs to accept and tasks nobody has started) and " +
-        "'in_progress' (what you already took on). Call this first when you join: " +
-        "it is cheaper than reading threads and it is the only place work aimed at " +
-        "you shows up on its own.",
+        "'in_progress' (what you already took on). Under 'health' you get the same " +
+        "kind of facts about the whole workspace rather than about you: pending " +
+        "handoffs by age, records where the party who acted is not the party the " +
+        "record names, open tasks parked on purpose kept apart from open tasks " +
+        "nobody has started, and handoff targets that have never acted here. Those " +
+        "are observations, not verdicts — none of them means something is wrong. " +
+        "Call this first when you join: it is cheaper than reading threads and it " +
+        "is the only place work aimed at you shows up on its own.",
       inputSchema: z.object({
         workspace: Workspace,
         limit: Limit,
