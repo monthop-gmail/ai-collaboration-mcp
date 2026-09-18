@@ -13,6 +13,7 @@ import {
   JWKS_SOURCES,
   type Jwks,
   type JwksSource,
+  type Principal,
 } from "./jwt";
 import type { Env } from "./env";
 
@@ -194,18 +195,33 @@ async function servePilotRoute(
  * `static_readonly_token` ลง `actor: null` เพราะรหัสบอกได้ว่าใบไหนเข้ามา บอกไม่ได้
  * ว่าใครถือ — โทเคนส่งต่อกันได้ ส่วน `gateway_jwt_rs256` ลงชื่อได้เพราะ `sub` ผ่าน
  * การตรวจลายเซ็นแล้วและผู้ถือแก้ไม่ได้
+ *
+ * **`cid` กับ `ops` อยู่ในบันทึก แต่ไม่ถือว่าเป็นเนื้อหาของโทเคน**
+ *
+ * สองค่านี้คือฐานที่ใช้ตัดสินว่าให้ผ่าน ไม่ใช่สิ่งที่ผู้เรียกส่งมาให้ประมวลผล
+ * การบันทึกว่าตัดสินบนฐานอะไร เป็นคนละเรื่องกับการบันทึกว่าเขาขออะไร — ถ้าไม่มี
+ * สองค่านี้ บันทึกบอกได้แค่ว่าใครเข้ามา บอกไม่ได้ว่าทำไมถึงให้เข้า
+ *
+ * ไม่ลง `aud` เพราะเป็นค่าที่ฝั่งนี้ตั้งเอง ถ้ามันไม่ตรง คำขอนั้นจะไม่มีอยู่ใน
+ * บันทึกตั้งแต่ต้น การลงซ้ำทุกบรรทัดจึงเพิ่มขนาดโดยไม่เพิ่มข้อเท็จจริง
+ *
+ * ไม่ลง `jti` เพราะยังไม่ได้เก็บไว้เทียบ การลงค่าที่ไม่มีใครใช้จะกลายเป็นฟิลด์ที่
+ * อยู่เฉย ๆ ซึ่งเป็นแผลที่ทั้งโต๊ะนี้ไล่แก้กันมาทั้งสัปดาห์
  */
-function auditActor(auth: ReadOnlyAuth & { ok: true }) {
+export function auditActor(auth: ReadOnlyAuth & { ok: true }) {
   const byJwt = auth.identity.source === "jwt";
   return {
     actor: byJwt ? `jwt:${auth.identity.name}` : null,
     actor_resolved: byJwt,
     authn_method: byJwt ? "gateway_jwt_rs256" : "static_readonly_token",
+    ...(auth.principal
+      ? { cid: auth.principal.cid, ops: auth.principal.ops }
+      : {}),
   };
 }
 
-type ReadOnlyAuth =
-  | { ok: true; identity: StaticIdentity }
+export type ReadOnlyAuth =
+  | { ok: true; identity: StaticIdentity; principal?: Principal }
   | { ok: false; reason: string; misconfigured?: undefined }
   | { ok: false; reason?: undefined; misconfigured: string };
 
@@ -301,7 +317,11 @@ async function authorizeReadOnly(request: Request, env: Env): Promise<ReadOnlyAu
     // operation ของรอบนี้เป็น `read` เสมอ เพราะเส้นนี้ไม่มี tool ที่เขียนได้เลย
     const verified = await setup.adapter.verify(token, { operation: "read" });
     return verified.ok
-      ? { ok: true, identity: { name: verified.principal.sub, source: "jwt" } }
+      ? {
+          ok: true,
+          identity: { name: verified.principal.sub, source: "jwt" },
+          principal: verified.principal,
+        }
       : { ok: false, reason: verified.reason };
   }
 

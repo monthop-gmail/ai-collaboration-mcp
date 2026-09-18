@@ -1,6 +1,6 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import worker, { auditActor } from "../src/index";
 import { applySchema } from "./apply-schema";
 import gateway from "./fixtures/adapter-conformance/vectors.json";
 import gatewayJwks from "./fixtures/adapter-conformance/jwks.json";
@@ -369,5 +369,61 @@ describe("attestation ที่ต้องประกาศให้ฝั่�
       .map(([id]) => id);
 
     expect(failed, `ประกาศไม่ได้: ${failed.join(", ")}`).toEqual([]);
+  });
+});
+
+/**
+ * รูปของบรรทัดบันทึกฝั่ง upstream
+ *
+ * `cid` กับ `ops` อยู่ในบันทึกเพราะเป็น**ฐานที่ใช้ตัดสิน** ไม่ใช่สิ่งที่ผู้เรียกส่งมา
+ * ให้ประมวลผล — ถ้าไม่มีสองค่านี้ บันทึกบอกได้แค่ว่าใครเข้ามา บอกไม่ได้ว่าทำไมถึงให้เข้า
+ *
+ * ขอโดย ai-tools-mcp/ChatGPT ที่ dis-514ae7a7 seq 35 เพื่อปิด acceptance ข้อสุดท้าย
+ */
+describe("บรรทัดบันทึกของ upstream", () => {
+  it("เส้น JWT ลง actor ที่ตรวจแล้ว พร้อม cid และ ops ที่ใช้ตัดสิน", () => {
+    const line = auditActor({
+      ok: true,
+      identity: { name: "oidc:conformance-subject", source: "jwt" },
+      principal: { sub: "oidc:conformance-subject", ops: ["read"], cid: "collab-readonly-test" },
+    });
+
+    expect(line.actor).toBe("jwt:oidc:conformance-subject");
+    expect(line.actor_resolved).toBe(true);
+    expect(line.authn_method).toBe("gateway_jwt_rs256");
+    expect(line.cid).toBe("collab-readonly-test");
+    expect(line.ops).toEqual(["read"]);
+  });
+
+  /**
+   * รหัสบอกได้ว่าใบไหนเข้ามา บอกไม่ได้ว่าใครถือ — โทเคนส่งต่อกันได้
+   * และเส้นนี้ไม่มี principal จึงไม่มี cid/ops ให้ลง ไม่ใช่ลงค่าว่าง
+   */
+  it("เส้น static ลง actor เป็น null และไม่มี cid/ops", () => {
+    const line = auditActor({
+      ok: true,
+      identity: { name: "test-team-readonly", source: "token" },
+    });
+
+    expect(line.actor).toBeNull();
+    expect(line.actor_resolved).toBe(false);
+    expect(line.authn_method).toBe("static_readonly_token");
+    expect(line).not.toHaveProperty("cid");
+    expect(line).not.toHaveProperty("ops");
+  });
+
+  /**
+   * ห้ามมีเนื้อหา อาร์กิวเมนต์ โทเคน หรือ PII — ตรวจด้วยบัญชีขาวของชื่อช่อง
+   * ไม่ใช่บัญชีดำ เพราะบัญชีดำกันได้แค่คำที่นึกออกตอนเขียน
+   */
+  it("ไม่มีช่องอื่นนอกจากที่ประกาศไว้", () => {
+    const allowed = ["actor", "actor_resolved", "authn_method", "cid", "ops"];
+    const line = auditActor({
+      ok: true,
+      identity: { name: "x", source: "jwt" },
+      principal: { sub: "x", ops: ["read"], cid: "c", team: "t", roles: ["r"], cor: "abc" },
+    });
+
+    expect(Object.keys(line).filter((k) => !allowed.includes(k))).toEqual([]);
   });
 });
