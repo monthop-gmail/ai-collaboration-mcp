@@ -112,19 +112,67 @@ export interface AdapterConfig {
    */
   connectorId: string;
   /**
-   * กุญแจที่ตั้งไว้มาจากไหน — `"fixture"` คือชุด vector สาธารณะ
+   * กุญแจที่ตั้งไว้มาจากไหน — สามชนิด และต้องประกาศให้ตรงกับของจริง
    *
-   * โทเคนในชุดนั้นมี `exp` ไกลถึงปี 2100 และอยู่ในรีโปสาธารณะ ใครอ่านรีโปแล้วหยิบ
-   * ไปยิงใส่ deployment ที่ตั้งกุญแจชุดนั้นได้ทันที — ยอมรับได้เฉพาะ deployment
-   * ทดสอบที่ไม่มีข้อมูลจริง และต้องประกาศตัว ไม่ใช่ตั้งไปเงียบ ๆ
+   * `fixture` คือกุญแจของชุด `adapter-conformance` ซึ่งมีโทเคนสำเร็จรูปที่ `exp`
+   * ไกลถึงปี 2100 วางอยู่ในรีโปสาธารณะ ใครอ่านรีโปหยิบไปยิงได้ทันทีโดยไม่ต้องมี
+   * กุญแจส่วนตัว — เสี่ยงที่สุดในสามชนิด
+   *
+   * `gateway-test` คือกุญแจของ test runtime ฝั่ง gateway ไม่มีโทเคนสำเร็จรูปแจก
+   * ต้องมีกุญแจส่วนตัวก่อนจึงสร้างโทเคนได้ แต่ยังไม่ใช่ของจริง
+   *
+   * `gateway` คือของจริง
+   *
+   * ทั้งสามห้ามสับสนกัน เพราะ "ใช้กุญแจที่ไม่ใช่ของจริง" กับ "เปิดให้ทุกคนที่อ่าน
+   * รีโปเข้าได้" ฟังคล้ายกันมากแต่เป็นคนละระดับความเสี่ยง
    */
-  jwksSource?: "fixture" | "gateway";
+  jwksSource?: JwksSource;
   /** นาฬิกา แยกออกมาให้เทสต์เดินเวลาได้ */
   now?: () => number;
 }
 
 export interface Jwks {
   keys?: Jwk[];
+}
+
+export const JWKS_SOURCES = ["fixture", "gateway-test", "gateway"] as const;
+export type JwksSource = (typeof JWKS_SOURCES)[number];
+
+/**
+ * คำนำหน้า `kid` ที่แต่ละชนิดต้องมี — `gateway` คือชนิดที่ต้องไม่มีคำนำหน้าทดสอบเลย
+ *
+ * ฝั่ง gateway ตั้งใจใส่คำนำหน้าไว้ในกุญแจทดสอบทุกดอกเพื่อให้การ์ดจับได้
+ * เราจึงใช้เครื่องหมายเดียวกัน ไม่ต้องตกลงกันใหม่และไม่ต้องเชื่อคำประกาศอย่างเดียว
+ */
+const TEST_KID_PREFIX: Record<Exclude<JwksSource, "gateway">, string> = {
+  fixture: "conformance-",
+  "gateway-test": "gw-test-",
+};
+
+/**
+ * ตรวจว่าที่ประกาศตรงกับกุญแจจริงไหม — คืนข้อความเมื่อไม่ตรง คืน undefined เมื่อผ่าน
+ *
+ * ประกาศไว้เฉย ๆ ไม่พอ เพราะค่าที่ประกาศผิดคือค่าที่อันตรายที่สุด — คนตั้งจะเชื่อว่า
+ * deployment นั้นปลอดภัยกว่าความจริง ตรวจกับตัวกุญแจจึงเป็นการทำให้คำประกาศมีผล
+ * ไม่ใช่แค่เป็นป้าย
+ */
+export function jwksSourceMismatch(jwks: Jwks, source: JwksSource): string | undefined {
+  const kids = (jwks.keys ?? []).map((k) => k.kid ?? "");
+
+  if (source === "gateway") {
+    const marked = kids.filter((kid) =>
+      Object.values(TEST_KID_PREFIX).some((prefix) => kid.startsWith(prefix)),
+    );
+    return marked.length
+      ? `GATEWAY_JWKS_SOURCE="gateway" but the key set contains test keys: ${marked.join(", ")}`
+      : undefined;
+  }
+
+  const prefix = TEST_KID_PREFIX[source];
+  const wrong = kids.filter((kid) => !kid.startsWith(prefix));
+  return wrong.length
+    ? `GATEWAY_JWKS_SOURCE="${source}" expects every kid to start with "${prefix}" — got: ${wrong.join(", ")}`
+    : undefined;
 }
 
 export interface UpstreamAdapter {
@@ -177,6 +225,7 @@ export function createAdapter(config: AdapterConfig): UpstreamAdapter {
     ...(trackJti ? [] : ["jti_replay_not_tracked"]),
     "jwks_pinned_not_fetched",
     ...(config.jwksSource === "fixture" ? ["jwks_is_public_test_fixture"] : []),
+    ...(config.jwksSource === "gateway-test" ? ["jwks_is_gateway_test_key"] : []),
   ];
 
   async function verify(token: string, ctx: { operation?: string }): Promise<VerifyResult> {

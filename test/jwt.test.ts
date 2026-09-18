@@ -15,7 +15,14 @@
  * ผ่านหรือไม่ผ่านชุดเดียวกับเขาทุกตัวอักษร** ไม่ได้ผ่อนเกณฑ์ให้ตัวเอง
  */
 import { describe, expect, it } from "vitest";
-import { createAdapter, CLAIM_CONTRACT, REJECT_REASONS } from "../src/jwt";
+import {
+  createAdapter,
+  jwksSourceMismatch,
+  CLAIM_CONTRACT,
+  JWKS_SOURCES,
+  REJECT_REASONS,
+} from "../src/jwt";
+import gwTestJwks from "./fixtures/gateway-test-runtime/jwks.json";
 import jwks from "./fixtures/adapter-conformance/jwks.json";
 import doc from "./fixtures/adapter-conformance/vectors.json";
 
@@ -232,5 +239,53 @@ describe("cid เทียบกับ connector ที่ประกาศไ�
 
     expect(fixture.limitations).toContain("jwks_is_public_test_fixture");
     expect(real.limitations).not.toContain("jwks_is_public_test_fixture");
+  });
+});
+
+/**
+ * ชนิดของกุญแจ — ประกาศไว้เฉย ๆ ไม่พอ ต้องตรงกับตัวกุญแจจริง
+ *
+ * ค่าที่ประกาศผิดคือค่าที่อันตรายที่สุด เพราะคนตั้งจะเชื่อว่า deployment นั้น
+ * ปลอดภัยกว่าความจริง — การ์ดนี้ใช้เครื่องหมายเดียวกับที่ฝั่ง gateway ใส่ไว้ใน
+ * `kid` ของกุญแจทดสอบทุกดอก จึงไม่ต้องตกลงกันใหม่และไม่ต้องเชื่อคำประกาศอย่างเดียว
+ */
+describe("ประกาศชนิดของกุญแจต้องตรงกับกุญแจจริง", () => {
+  it("รับสามชนิด ไม่ขาดไม่เกิน", () => {
+    expect([...JWKS_SOURCES]).toEqual(["fixture", "gateway-test", "gateway"]);
+  });
+
+  it("ชุด conformance ประกาศเป็น fixture ผ่าน", () => {
+    expect(jwksSourceMismatch(jwks, "fixture")).toBeUndefined();
+  });
+
+  it("ชุด gateway test runtime ประกาศเป็น gateway-test ผ่าน", () => {
+    expect(jwksSourceMismatch(gwTestJwks, "gateway-test")).toBeUndefined();
+  });
+
+  it("เอากุญแจทดสอบไปประกาศว่าเป็นของจริง ต้องไม่ผ่าน ทั้งสองชนิด", () => {
+    expect(jwksSourceMismatch(jwks, "gateway")).toContain("conformance-");
+    expect(jwksSourceMismatch(gwTestJwks, "gateway")).toContain("gw-test-");
+  });
+
+  it("ประกาศสลับชนิดกันเอง ต้องไม่ผ่าน", () => {
+    expect(jwksSourceMismatch(gwTestJwks, "fixture")).toBeTruthy();
+    expect(jwksSourceMismatch(jwks, "gateway-test")).toBeTruthy();
+  });
+
+  it("กุญแจที่ไม่มีเครื่องหมายทดสอบ ประกาศเป็น gateway ได้", () => {
+    const real = { keys: [{ kty: "RSA", kid: "prod-2026-09", alg: "RS256" }] };
+    expect(jwksSourceMismatch(real, "gateway")).toBeUndefined();
+  });
+
+  it("กุญแจ gateway-test ประกาศถูก → ทะเบียนบอกว่ายังไม่ใช่ของจริง", () => {
+    const a = createAdapter({
+      issuer: doc.issuer,
+      audience: doc.audience,
+      connectorId: doc.connector_id,
+      getJwks: () => gwTestJwks,
+      jwksSource: "gateway-test",
+    });
+    expect(a.limitations).toContain("jwks_is_gateway_test_key");
+    expect(a.limitations).not.toContain("jwks_is_public_test_fixture");
   });
 });

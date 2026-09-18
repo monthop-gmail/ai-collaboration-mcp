@@ -7,7 +7,13 @@ import { json, secretsMatch } from "./http";
 import { handleView } from "./view";
 import { nameForToken, staticIdentityFor, type StaticIdentity } from "./identity";
 import { withReadOnlyGuard } from "./readonly";
-import { createAdapter, type Jwks } from "./jwt";
+import {
+  createAdapter,
+  jwksSourceMismatch,
+  JWKS_SOURCES,
+  type Jwks,
+  type JwksSource,
+} from "./jwt";
 import type { Env } from "./env";
 
 const MCP_ROUTE = "/mcp";
@@ -240,11 +246,11 @@ function gatewaySetup(env: Env): GatewaySetup {
     return { state: "broken", detail: `gateway JWT config is incomplete: missing ${missing.join(", ")}` };
   }
 
-  const source = env.GATEWAY_JWKS_SOURCE;
-  if (source !== "fixture" && source !== "gateway") {
+  const source = env.GATEWAY_JWKS_SOURCE as JwksSource;
+  if (!JWKS_SOURCES.includes(source)) {
     return {
       state: "broken",
-      detail: 'GATEWAY_JWKS_SOURCE must be "fixture" or "gateway" — it declares whether the key is the public test set',
+      detail: `GATEWAY_JWKS_SOURCE must be one of ${JWKS_SOURCES.join(", ")} — it declares what kind of key this is`,
     };
   }
 
@@ -255,6 +261,11 @@ function gatewaySetup(env: Env): GatewaySetup {
     return { state: "broken", detail: "GATEWAY_JWKS is not valid JSON" };
   }
   if (!jwks.keys?.length) return { state: "broken", detail: "GATEWAY_JWKS has no keys" };
+
+  // ประกาศไว้เฉย ๆ ไม่พอ ต้องตรงกับตัวกุญแจจริง — ค่าที่ประกาศผิดคือค่าที่อันตราย
+  // ที่สุด เพราะคนตั้งจะเชื่อว่า deployment นั้นปลอดภัยกว่าความจริง
+  const mismatch = jwksSourceMismatch(jwks, source);
+  if (mismatch) return { state: "broken", detail: mismatch };
 
   return {
     state: "ready",
