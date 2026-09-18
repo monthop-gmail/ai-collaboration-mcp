@@ -311,7 +311,7 @@ describe("config ของ gateway ตั้งไม่ครบ ต้อง�
 });
 
 /**
- * สามข้อที่ชุดกลางทดสอบแทนไม่ได้ และต้องประกาศมาเอง
+ * ของที่ชุดกลางทดสอบแทนไม่ได้ และต้องประกาศมาเอง
  *
  * ชุดกลางรับ config มาจากไฟล์ vector เอง จะสร้าง adapter ด้วยค่าที่ไม่ตรงกับไฟล์
  * ก็เป็นการทดสอบตัวเองมากกว่าทดสอบ adapter — แต่ปล่อยเงียบไม่ได้ เพราะ adapter ที่
@@ -347,9 +347,24 @@ describe("attestation ที่ต้องประกาศให้ฝั่�
     });
     const body = (await broken.json()) as { error?: string; detail?: string };
 
+    // 4 — ยิงจริงแล้วดูว่า content-type ที่ตอบกลับเป็นอะไร
+    //
+    // ข้อนี้มีเทสต์อยู่แล้วที่หัวข้อ "รูปของคำตอบที่เราส่งออกไป" ข้างล่าง แต่การชี้ไปที่
+    // เทสต์อื่นไม่ใช่การพิสูจน์ — ถ้าไฟล์นั้นถูกลบหรือถูก skip คำประกาศจะยังเขียว
+    // ซึ่งเป็นรูปเดียวกับที่ช่อง attestation ทั้งช่องถูกสร้างมาเพื่อกัน จึงยิงซ้ำตรงนี้
+    //
+    // ไม่ล็อกว่าต้องเป็นรูปไหน เพราะ MCP อนุญาตทั้ง SSE และ JSON ล้วน — ที่ล็อกคือ
+    // **ต้องเป็นรูปที่เรารู้จักและมีคนวัด** ถ้าวันหนึ่งตอบเป็นรูปที่สาม ข้อนี้แดง
+    const known = ["text/event-stream", "application/json"];
+    const measured = async (token: string) => {
+      const type = (await call("/mcp-readonly", token, CONTEXT_CALL)).headers.get("content-type");
+      return type !== null && known.some((t) => type.includes(t));
+    };
+
     return {
       connector_id_not_derived: got.ok === false && got.reason === "connector_mismatch",
       jwks_source_declared: sourceGuard,
+      response_format_asserted: (await measured(RO)) && (await measured("not-a-real-token")),
       config_incomplete_fails_boot:
         broken.status === 500 &&
         body.error === "server_misconfigured" &&
@@ -362,7 +377,7 @@ describe("attestation ที่ต้องประกาศให้ฝั่�
     expect(Object.keys(await prove()).sort()).toEqual(required);
   });
 
-  it("ทั้งสามข้อพิสูจน์ผ่าน จึงประกาศได้", async () => {
+  it("ทุกข้อพิสูจน์ผ่าน จึงประกาศได้", async () => {
     const proved = await prove();
     const failed = Object.entries(proved)
       .filter(([, ok]) => !ok)
@@ -481,7 +496,7 @@ describe("รูปของคำตอบที่เราส่งออก�
    * แยกไว้ให้ชัดเพราะถ้าไม่แยก คนอ่านจะเข้าใจว่าทุกคำตอบเป็น SSE
    */
   it("คำปฏิเสธเป็น JSON ไม่ใช่ SSE", async () => {
-    const response = await call("/mcp-readonly", "ไม่ใช่รหัสจริง", CONTEXT_CALL);
+    const response = await call("/mcp-readonly", "not-a-real-token", CONTEXT_CALL);
 
     expect(response.status).toBe(401);
     expect(response.headers.get("content-type")).toContain("application/json");
