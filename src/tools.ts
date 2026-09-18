@@ -12,7 +12,7 @@ import {
   type MessageKind,
 } from "./db";
 import { CONTRACT_VERSION, Limit, QuietForDays, Workspace, registerTool, run } from "./tool-kit";
-import { readOpenItems } from "./db-work";
+import { readOpenItems, readStandingRules } from "./db-work";
 import { registerWorkTools } from "./tools-work";
 
 const Kind = z
@@ -170,6 +170,8 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         "record names, open tasks parked on purpose kept apart from open tasks " +
         "nobody has started, and handoff targets that have never acted here. Those " +
         "are observations, not verdicts — none of them means something is wrong. " +
+        "'standing_rules' lists the decisions that bind every team here, by id and " +
+        "title only — read them with get_decisions before deciding how to work. " +
         "Call this first when you join: it is cheaper than reading threads and it " +
         "is the only place work aimed at you shows up on its own.",
       inputSchema: z.object({
@@ -181,9 +183,10 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
     async ({ workspace, limit, quiet_for_days }) =>
       run(async () => {
         const me = author();
-        const [context, openItems] = await Promise.all([
+        const [context, openItems, standingRules] = await Promise.all([
           readWorkspaceContext(env.DB, workspace, limit, quiet_for_days),
           readOpenItems(env.DB, workspace, me.name),
+          readStandingRules(env.DB, workspace),
         ]);
 
         return {
@@ -192,6 +195,9 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
           contract: CONTRACT_VERSION,
           workspace: context.workspace,
           you_are: me.name,
+          // อยู่ก่อน open_items โดยตั้งใจ — กติกาต้องอ่านก่อนตัดสินใจว่าจะทำงานอย่างไร
+          // ไม่ใช่เจอทีหลังตอนที่ทำผิดไปแล้ว
+          standing_rules: standingRules,
           participants: context.participants,
           open_items: openItems,
           discussions: context.discussions,

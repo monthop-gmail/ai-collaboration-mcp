@@ -15,6 +15,9 @@ import {
   readPlans,
   recordPlan,
   resolveDecision,
+  setDecisionScope,
+  DECISION_SCOPES,
+  type DecisionScope,
   readHandoffs,
   readTasks,
   recordDecision,
@@ -89,6 +92,54 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           status as DecisionStatus | undefined,
         );
         return { decisions: page.rows, has_more: page.has_more, total: page.total };
+      }),
+  );
+
+  registerTool(
+    server,
+    "set_decision_scope",
+    {
+      description:
+        "Mark an approved decision as a rule the whole workspace must follow, or " +
+        "take that mark off. Rules marked this way are listed under " +
+        "'standing_rules' in get_workspace_context, so nobody has to page through " +
+        "every decision to find the ones that bind them. This ALWAYS requires the " +
+        "server's approval code — closing a decision can be relayed, but marking " +
+        "one as a rule binds people who were not in the room, so it cannot be. " +
+        "Only 'approved' decisions can be marked.",
+      inputSchema: z.object({
+        decision_id: z.string().min(1),
+        scope: z
+          .enum(DECISION_SCOPES)
+          .describe(
+            "'workspace' makes it a standing rule for everyone; 'project' is the " +
+              "default and means it settles its own subject only.",
+          ),
+        approval_code: z
+          .string()
+          .min(1)
+          .describe(
+            "The server's approval code, handed to you by a person for this call. " +
+              "There is no unverified path here — a wrong or missing code fails the " +
+              "call and changes nothing.",
+          ),
+      }),
+    },
+    async ({ decision_id, scope, approval_code }) =>
+      run(async () => {
+        const decision = await setDecisionScope(
+          env.DB,
+          decision_id,
+          scope as DecisionScope,
+          { code: approval_code, secret: env.APPROVAL_SECRET },
+        );
+        return {
+          decision_id: decision.id,
+          title: decision.title,
+          scope: decision.scope,
+          status: decision.status,
+          standing_rule: decision.scope === "workspace",
+        };
       }),
   );
 

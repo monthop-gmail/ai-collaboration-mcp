@@ -40,6 +40,8 @@ const WRITE_TOOLS = [
   "accept_handoff",
   "record_plan",
   "resolve_decision",
+  // ปักกติกาเป็นการเขียน และเป็นการเขียนที่ผูกคนทั้งโต๊ะ — เส้นอ่านต้องไม่มีทางเรียกได้
+  "set_decision_scope",
 ];
 
 async function call(

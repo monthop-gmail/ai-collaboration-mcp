@@ -11,6 +11,15 @@ import { RequestError, postMessage, type Author } from "./db";
 export const DECISION_STATUSES = ["proposed", "approved", "rejected"] as const;
 export type DecisionStatus = (typeof DECISION_STATUSES)[number];
 
+/**
+ * ใบนี้ผูกเฉพาะเรื่องของมัน หรือเป็นกติกาของทั้งโต๊ะ
+ *
+ * `project` เป็นค่าเริ่มต้นและเป็นของส่วนใหญ่ — อนุมัติเรื่องเดียวของโปรเจกต์เดียว
+ * `workspace` คือกติกาที่ทุกทีมต้องทำตาม ซึ่งต้องหาเจอโดยไม่ต้องไล่อ่านทุกใบ
+ */
+export const DECISION_SCOPES = ["project", "workspace"] as const;
+export type DecisionScope = (typeof DECISION_SCOPES)[number];
+
 export const TASK_STATUSES = ["open", "in_progress", "blocked", "done"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
@@ -30,6 +39,7 @@ export interface Decision {
   decided_reason: string | null;
   decided_at: string | null;
   superseded_by: string | null;
+  scope: DecisionScope;
 }
 
 /**
@@ -250,6 +260,8 @@ export async function recordDecision(
     decided_reason: null,
     decided_at: null,
     superseded_by: null,
+    // ใบเกิดใหม่ผูกเฉพาะเรื่องของมันเสมอ ไม่มีทางที่ผู้เสนอจะปักใบของตัวเองเป็นกติกา
+    scope: "project",
   };
 
   await db
@@ -900,6 +912,101 @@ export async function resolveDecision(
     },
     announced,
   };
+}
+
+/* ── กติกาของโต๊ะ ─────────────────────────────────────────────────────── */
+
+export interface StandingRule {
+  id: string;
+  title: string;
+  /** ระดับหลักฐานของการปิดใบ ไม่ใช่ของการปัก — สองอย่างนี้เกิดคนละเวลา */
+  decided_by_kind: DecidedByKind | null;
+  decided_at: string | null;
+}
+
+/**
+ * ปักใบที่อนุมัติแล้วให้เป็นกติกาของทั้งโต๊ะ หรือถอดออก
+ *
+ * **ต้องส่ง APPROVAL_SECRET ที่ถูกต้องมาด้วยเสมอ ไม่มีทางอื่น** ซึ่งเข้มกว่าการปิดใบ
+ * โดยตั้งใจ เพราะการปิดใบผูกเฉพาะเรื่องของใบนั้น ส่วนการปักเป็นกติกา**ผูกคนที่ไม่ได้
+ * อยู่ในห้องตอนตัดสิน** รวมถึงทีมที่ยังไม่เข้ามาในโต๊ะ
+ *
+ * ผลที่ได้จากการบังคับข้อนี้คือคุณสมบัติที่ผู้อ่านใช้ได้โดยไม่ต้องไล่ดูทีละแถว —
+ * **ทุกใบในรายการกติกา มีคนที่ถือรหัสของเซิร์ฟเวอร์เป็นคนปัก** ถ้ายอมให้ปักแบบ
+ * relayed ได้ด้วย คำแถลงนั้นจะอ่อนลงเหลือ "มี AI สักตัวบอกว่ามีคนสั่ง"
+ *
+ * แยกจาก `resolve_decision` เพราะใบที่เป็นกติกาอยู่แล้ววันนี้ **ถูกปิดไปหมดแล้ว**
+ * ถ้าตั้งได้เฉพาะตอนปิด ใบที่ทำให้ต้องมีฟีเจอร์นี้ตั้งแต่แรกจะปักไม่ได้ตลอดกาล
+ */
+export async function setDecisionScope(
+  db: D1Database,
+  decisionId: string,
+  scope: DecisionScope,
+  approval: { code: string; secret?: string },
+): Promise<Decision> {
+  if (!approval.secret) {
+    throw new RequestError(
+      "เซิร์ฟเวอร์ยังไม่ได้ตั้ง APPROVAL_SECRET จึงตรวจรหัสไม่ได้ — " +
+        "การปักกติกาต้องมีคนยืนยัน ไม่มีทางปักโดยไม่ยืนยัน",
+    );
+  }
+  if (approval.code !== approval.secret) {
+    throw new RequestError("approval_code ไม่ถูกต้อง — ไม่ได้เปลี่ยน scope ให้");
+  }
+
+  const existing = await db
+    .prepare("SELECT * FROM decisions WHERE id = ?1")
+    .bind(decisionId)
+    .first<Decision>();
+  if (!existing) throw new RequestError(`ไม่พบ decision '${decisionId}'`);
+
+  // ใบที่ยังไม่ถูกตัดสิน หรือถูกปฏิเสธไปแล้ว เป็นกติกาไม่ได้ — ข้อเสนอที่ยังไม่ผ่าน
+  // ไม่ได้ผูกใคร และของที่ตกไปแล้วยิ่งไม่ผูก
+  if (scope === "workspace" && existing.status !== "approved") {
+    throw new RequestError(
+      `ใบนี้สถานะ '${existing.status}' ยังไม่ใช่ 'approved' จึงเป็นกติกาของโต๊ะไม่ได้`,
+    );
+  }
+
+  await db
+    .prepare("UPDATE decisions SET scope = ?1 WHERE id = ?2")
+    .bind(scope, decisionId)
+    .run();
+
+  return { ...existing, scope };
+}
+
+/**
+ * กติกาที่ยังใช้อยู่ของ workspace — คืนแค่ตัวชี้กับหัวเรื่อง ไม่เอาเนื้อ
+ *
+ * ค่านี้ไปอยู่ใน `get_workspace_context` ซึ่งผู้เรียกทุกตัวเรียกเป็นอันดับแรก จึงต้อง
+ * ถูกที่สุด — ห้าใบเป็นไม่กี่ร้อย byte ส่วนคนที่อยากอ่านเต็มเรียก `get_decisions`
+ * เป็นใบ ๆ ได้ · วัดมาแล้วว่า `get_decisions` ของ 16 ใบที่อนุมัติแล้วคืนมา 54KB
+ * ซึ่งแปลว่าคำแนะนำที่ว่า "ไปอ่านเอาเอง" จ่ายไม่ไหวอยู่แล้ววันนี้
+ *
+ * ตัดใบที่ถูกแทนแล้วออก ด้วยเกณฑ์เดียวกับ `plans_current`
+ *
+ * เรียงด้วย `rowid` ต่อท้ายเพราะเวลาใน Workers ไม่ขยับระหว่างโค้ดที่รันติดกัน สองใบ
+ * ที่ปิดในจังหวะเดียวกันจะได้ `decided_at` เท่ากัน แล้วลำดับจะไม่แน่นอน — เป็นแผล
+ * เดียวกับที่ `HAS_NEWER_HANDOFF` เจอมาก่อน ต่างกันแค่ที่นั่นทำให้ไม่มีใบไหนเหลือ
+ * ให้รับ ส่วนที่นี่ทำให้กติกาสลับลำดับแบบสุ่มระหว่างการเรียกสองครั้ง
+ */
+export async function readStandingRules(
+  db: D1Database,
+  workspaceId: string,
+): Promise<StandingRule[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, title, decided_by_kind, decided_at
+         FROM decisions
+        WHERE workspace_id = ?1 AND scope = 'workspace'
+          AND status = 'approved' AND superseded_by IS NULL
+        ORDER BY decided_at, rowid`,
+    )
+    .bind(workspaceId)
+    .all<StandingRule>();
+
+  return results;
 }
 
 /* ── ภาพรวมของที่ยังค้าง ─────────────────────────────────────────────── */

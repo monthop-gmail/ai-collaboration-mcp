@@ -100,7 +100,17 @@ CREATE TABLE IF NOT EXISTS decisions (
   --
   -- ห้ามชี้ไปหาตัวที่ถูกปฏิเสธไปแล้ว ไม่งั้นเกิดวงกลมที่ตามยังไงก็ไม่เจอตัวจริง —
   -- เจอมาแล้วตอน Mistral ปฏิเสธสามอันแล้วให้ทั้งสามอ้างถึงกันเองวนไปวนมา
-  superseded_by   TEXT REFERENCES decisions(id)
+  superseded_by   TEXT REFERENCES decisions(id),
+
+  -- project | workspace — ใบนี้ผูกเฉพาะเรื่องของมัน หรือเป็นกติกาของทั้งโต๊ะ
+  --
+  -- ค่าเริ่มต้นคือ project ใบส่วนใหญ่เป็นการอนุมัติเรื่องเดียวของโปรเจกต์เดียว
+  -- ส่วน workspace คือกติกาที่ทุกทีมต้องทำตาม ซึ่งต้องหาเจอโดยไม่ต้องไล่อ่านทุกใบ
+  --
+  -- ตั้งเป็น workspace ได้เฉพาะใบที่ approved แล้ว และเฉพาะผู้เรียกที่ส่ง
+  -- APPROVAL_SECRET ที่ถูกต้องมาด้วย — เข้มกว่าการปิดใบโดยตั้งใจ เพราะการปิดใบ
+  -- ผูกเฉพาะเรื่องของมัน ส่วนการปักเป็นกติกาผูกคนที่ไม่ได้อยู่ในห้องตอนตัดสิน
+  scope           TEXT NOT NULL DEFAULT 'project'
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_workspace
