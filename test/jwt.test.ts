@@ -67,8 +67,8 @@ async function runAll(trackJti: boolean) {
 }
 
 describe("upstream adapter — ชุด vector ของ gateway", () => {
-  it("ครบ 23 vector ตามที่สัญญาระบุ ไม่ขาดไม่เกิน", () => {
-    expect(vectors).toHaveLength(23);
+  it("ครบ 24 vector ตามที่สัญญาระบุ ไม่ขาดไม่เกิน", () => {
+    expect(vectors).toHaveLength(24);
   });
 
   /**
@@ -84,19 +84,19 @@ describe("upstream adapter — ชุด vector ของ gateway", () => {
       "replay_first_use",
       "replay_second_use",
     ]);
-    expect(results.filter((r) => r.status === "pass")).toHaveLength(21);
+    expect(results.filter((r) => r.status === "pass")).toHaveLength(22);
   });
 
   /**
    * รันซ้ำแบบเก็บ `jti` เพื่อพิสูจน์ว่าตรรกะข้อ 5 ถูก แม้เราจะไม่เปิดใช้บน Worker
    * — การประกาศ false เป็นเพราะที่เก็บใช้ไม่ได้ ไม่ใช่เพราะเขียนไม่ได้
    */
-  it("เปิด trackJti ในโพรเซสเดียว — ผ่านครบ 23 รวมกลุ่ม replay", async () => {
+  it("เปิด trackJti ในโพรเซสเดียว — ผ่านครบ 24 รวมกลุ่ม replay", async () => {
     const results = await runAll(true);
     const failed = results.filter((r) => r.status === "fail");
 
     expect(failed, JSON.stringify(failed, null, 2)).toHaveLength(0);
-    expect(results.filter((r) => r.status === "pass")).toHaveLength(23);
+    expect(results.filter((r) => r.status === "pass")).toHaveLength(24);
   });
 });
 
