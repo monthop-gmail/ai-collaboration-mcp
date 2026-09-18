@@ -225,7 +225,21 @@ export function auditActor(auth: ReadOnlyAuth & { ok: true }) {
     actor_resolved: byJwt,
     authn_method: byJwt ? "gateway_jwt_rs256" : "static_readonly_token",
     ...(auth.principal
-      ? { cid: auth.principal.cid, ops: auth.principal.ops }
+      ? {
+          cid: auth.principal.cid,
+          ops: auth.principal.ops,
+          // `cor` ลงได้เพราะมีคนใช้และบอกได้ว่าใช้ทำอะไร
+          //
+          // trueforge ขอไว้ที่ dis-514ae7a7 seq 36 ว่าถ้าเก็บไว้จะเทียบบรรทัดของ
+          // gateway กับของ upstream ได้ใบต่อใบ · รอบเก็บ log จริงเมื่อ 18 ก.ย.
+          // พิสูจน์ว่าจำเป็น เพราะจับคู่ได้เฉพาะด้วยเวลากับ method ซึ่งชนกันเองเมื่อ
+          // ยิงถี่ ๆ ในวินาทีเดียวกัน
+          //
+          // เกณฑ์ที่ใช้ตัดสินคือเกณฑ์เดียวกับที่ใช้ปฏิเสธ `jti` — ลงเมื่อมีคนอ่าน
+          // ไม่ใช่ลงเพราะมีค่าให้ลง ต่างกันตรงที่ `cor` มีผู้ใช้ที่ระบุตัวได้แล้ว
+          // ส่วน `jti` ยังไม่มี
+          ...(auth.principal.cor ? { cor: auth.principal.cor } : {}),
+        }
       : {}),
   };
 }

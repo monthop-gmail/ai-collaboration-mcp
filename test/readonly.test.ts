@@ -396,6 +396,26 @@ describe("บรรทัดบันทึกของ upstream", () => {
   });
 
   /**
+   * `cor` ลงเฉพาะเมื่อโทเคนพามา — ไม่ลงค่าว่างเมื่อไม่มี เพราะช่องที่มีอยู่เสมอ
+   * แต่ว่างบ่อย ทำให้คนอ่านแยกไม่ออกว่าไม่มีค่า หรือมีค่าแต่เป็นค่าว่าง
+   */
+  it("cor ลงเมื่อโทเคนพามา และไม่มีช่องนั้นเลยเมื่อไม่มี", () => {
+    const withCor = auditActor({
+      ok: true,
+      identity: { name: "s", source: "jwt" },
+      principal: { sub: "s", ops: ["read"], cid: "c", cor: "6c2b4ae4" },
+    });
+    const without = auditActor({
+      ok: true,
+      identity: { name: "s", source: "jwt" },
+      principal: { sub: "s", ops: ["read"], cid: "c" },
+    });
+
+    expect(withCor.cor).toBe("6c2b4ae4");
+    expect(without).not.toHaveProperty("cor");
+  });
+
+  /**
    * รหัสบอกได้ว่าใบไหนเข้ามา บอกไม่ได้ว่าใครถือ — โทเคนส่งต่อกันได้
    * และเส้นนี้ไม่มี principal จึงไม่มี cid/ops ให้ลง ไม่ใช่ลงค่าว่าง
    */
@@ -417,7 +437,7 @@ describe("บรรทัดบันทึกของ upstream", () => {
    * ไม่ใช่บัญชีดำ เพราะบัญชีดำกันได้แค่คำที่นึกออกตอนเขียน
    */
   it("ไม่มีช่องอื่นนอกจากที่ประกาศไว้", () => {
-    const allowed = ["actor", "actor_resolved", "authn_method", "cid", "ops"];
+    const allowed = ["actor", "actor_resolved", "authn_method", "cid", "ops", "cor"];
     const line = auditActor({
       ok: true,
       identity: { name: "x", source: "jwt" },
