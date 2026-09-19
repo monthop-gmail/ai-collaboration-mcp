@@ -40,6 +40,8 @@ export interface Decision {
   decided_at: string | null;
   superseded_by: string | null;
   scope: DecisionScope;
+  scope_set_by: string | null;
+  scope_set_at: string | null;
 }
 
 /**
@@ -262,6 +264,8 @@ export async function recordDecision(
     superseded_by: null,
     // ใบเกิดใหม่ผูกเฉพาะเรื่องของมันเสมอ ไม่มีทางที่ผู้เสนอจะปักใบของตัวเองเป็นกติกา
     scope: "project",
+    scope_set_by: null,
+    scope_set_at: null,
   };
 
   await db
@@ -922,6 +926,15 @@ export interface StandingRule {
   /** ระดับหลักฐานของการปิดใบ ไม่ใช่ของการปัก — สองอย่างนี้เกิดคนละเวลา */
   decided_by_kind: DecidedByKind | null;
   decided_at: string | null;
+  /**
+   * ใครปักใบนี้เป็นกติกา และเมื่อไหร่ — `null` ทั้งคู่แปลว่าถูกปักก่อนที่จะมีช่องนี้
+   *
+   * ใช้ชื่อเดียวกับคอลัมน์ในตารางโดยตั้งใจ แม้ในบริบทนี้คำว่า `pinned_by` จะอ่านลื่นกว่า
+   * เพราะ `get_decisions` คืนทั้งแถวด้วย `SELECT *` ถ้าตั้งชื่อต่างกันสองที่ คนอ่านจะ
+   * ต้องรู้เองว่าสองชื่อนี้คือค่าเดียวกัน
+   */
+  scope_set_by: string | null;
+  scope_set_at: string | null;
 }
 
 /**
@@ -942,6 +955,7 @@ export async function setDecisionScope(
   db: D1Database,
   decisionId: string,
   scope: DecisionScope,
+  author: Author,
   approval: { code: string; secret?: string },
 ): Promise<Decision> {
   if (!approval.secret) {
@@ -968,12 +982,15 @@ export async function setDecisionScope(
     );
   }
 
+  // บันทึกทั้งตอนปักและตอนถอด ถ้าบันทึกเฉพาะตอนปัก แถวที่ถูกถอดจะค้างชื่อคนปักไว้
+  // ทั้งที่มันไม่ใช่กติกาแล้ว ซึ่งชี้ผิดคนแย่กว่าไม่ชี้เลย
+  const setAt = now();
   await db
-    .prepare("UPDATE decisions SET scope = ?1 WHERE id = ?2")
-    .bind(scope, decisionId)
+    .prepare("UPDATE decisions SET scope = ?1, scope_set_by = ?2, scope_set_at = ?3 WHERE id = ?4")
+    .bind(scope, author.name, setAt, decisionId)
     .run();
 
-  return { ...existing, scope };
+  return { ...existing, scope, scope_set_by: author.name, scope_set_at: setAt };
 }
 
 /**
@@ -997,7 +1014,7 @@ export async function readStandingRules(
 ): Promise<StandingRule[]> {
   const { results } = await db
     .prepare(
-      `SELECT id, title, decided_by_kind, decided_at
+      `SELECT id, title, decided_by_kind, decided_at, scope_set_by, scope_set_at
          FROM decisions
         WHERE workspace_id = ?1 AND scope = 'workspace'
           AND status = 'approved' AND superseded_by IS NULL

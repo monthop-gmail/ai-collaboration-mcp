@@ -106,7 +106,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         "every decision to find the ones that bind them. This ALWAYS requires the " +
         "server's approval code — closing a decision can be relayed, but marking " +
         "one as a rule binds people who were not in the room, so it cannot be. " +
-        "Only 'approved' decisions can be marked.",
+        "Only 'approved' decisions can be marked. Who changed the scope and when " +
+        "is recorded on the decision, for marking and for unmarking alike.",
       inputSchema: z.object({
         decision_id: z.string().min(1),
         scope: z
@@ -131,6 +132,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           env.DB,
           decision_id,
           scope as DecisionScope,
+          author(),
           { code: approval_code, secret: env.APPROVAL_SECRET },
         );
         return {
@@ -139,6 +141,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           scope: decision.scope,
           status: decision.status,
           standing_rule: decision.scope === "workspace",
+          scope_set_by: decision.scope_set_by,
+          scope_set_at: decision.scope_set_at,
         };
       }),
   );

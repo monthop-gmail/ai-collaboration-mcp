@@ -35,6 +35,7 @@ async function callTool(
   name: string,
   args: Record<string, unknown>,
   useEnv: typeof testEnv = testEnv,
+  as: string = TEAM,
 ): Promise<Record<string, unknown>> {
   const ctx = createExecutionContext();
   const response = await worker.fetch(
@@ -44,7 +45,7 @@ async function callTool(
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
         authorization: `Bearer ${TOKEN}`,
-        "x-client-name": TEAM,
+        "x-client-name": as,
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
@@ -73,6 +74,8 @@ interface Rule {
   title: string;
   decided_by_kind: string | null;
   decided_at: string | null;
+  scope_set_by: string | null;
+  scope_set_at: string | null;
 }
 
 async function rules(): Promise<Rule[]> {
@@ -265,7 +268,14 @@ describe("รายการกติกาถูกโดยไม่ต้อ�
 
     const [rule] = await rules();
 
-    expect(Object.keys(rule).sort()).toEqual(["decided_at", "decided_by_kind", "id", "title"]);
+    expect(Object.keys(rule).sort()).toEqual([
+      "decided_at",
+      "decided_by_kind",
+      "id",
+      "scope_set_at",
+      "scope_set_by",
+      "title",
+    ]);
     expect(JSON.stringify(rule)).not.toContain("รายละเอียดของใบ");
   });
 
@@ -286,5 +296,123 @@ describe("รายการกติกาถูกโดยไม่ต้อ�
     });
 
     expect((await rules()).map((r) => r.id)).toEqual([first, second]);
+  });
+});
+
+/**
+ * ใครปักและเมื่อไหร่ — ช่องที่ `0003` ลืมไว้
+ *
+ * ตอนออก `scope` รอบแรก ระบบตอบได้ว่า *ทุกใบที่ถูกปักมีคนถือรหัสเป็นคนทำ* เพราะไม่มี
+ * ทางอื่นเข้ามาได้ แต่ตอบไม่ได้ว่า **ใบไหนใครปักตอนไหน** ซึ่งเป็นคำถามที่คนจะถามจริง
+ * เวลามีเรื่องต้องชี้ และเป็นรูปเดียวกับที่ทั้งโต๊ะไล่แก้กันมาทั้งสัปดาห์ คือบันทึกที่
+ * ตอบคำถามเกี่ยวกับคนไม่ได้
+ */
+describe("บันทึกว่าใครเปลี่ยน scope และเมื่อไหร่", () => {
+  const TEAM_OTHER = "owner/team-b";
+
+  it("ปักแล้วติดชื่อผู้ปักกับเวลา ทั้งในผลคำสั่งและในรายการกติกา", async () => {
+    const decisionId = await decided("กติกาที่จะดูว่าใครปัก");
+
+    const result = await callTool("set_decision_scope", {
+      decision_id: decisionId,
+      scope: "workspace",
+      approval_code: SECRET,
+    });
+
+    expect(result.scope_set_by).toBe(TEAM);
+    expect(typeof result.scope_set_at).toBe("string");
+
+    const [rule] = await rules();
+    expect(rule.scope_set_by).toBe(TEAM);
+    expect(rule.scope_set_at).toBe(result.scope_set_at);
+  });
+
+  /**
+   * เวลาของการปัก ต้องไม่ใช่เวลาของการปิดใบ — สองอย่างนี้คนละเหตุการณ์ และเคยห่างกัน
+   * เป็นวันมาแล้วกับ `dec-9850cb54` ที่ปิดวันที่ 18 แล้วถูกปักวันที่ 19
+   */
+  it("เวลาปัก แยกจากเวลาปิดใบ", async () => {
+    const decisionId = await decided("กติกาที่ปิดก่อนแล้วค่อยปัก");
+    await callTool("set_decision_scope", {
+      decision_id: decisionId,
+      scope: "workspace",
+      approval_code: SECRET,
+    });
+
+    const [rule] = await rules();
+
+    expect(rule.decided_at).not.toBeNull();
+    expect(rule.scope_set_at).not.toBeNull();
+    expect(Object.keys(rule).sort()).toEqual([
+      "decided_at",
+      "decided_by_kind",
+      "id",
+      "scope_set_at",
+      "scope_set_by",
+      "title",
+    ]);
+  });
+
+  /**
+   * บันทึกตอนถอดด้วย ถ้าบันทึกเฉพาะตอนปัก แถวที่ถูกถอดจะค้างชื่อคนปักไว้ทั้งที่มัน
+   * ไม่ใช่กติกาแล้ว ซึ่งชี้ผิดคนแย่กว่าไม่ชี้เลย
+   */
+  it("ถอดออกก็บันทึกว่าใครถอด ไม่ใช่ค้างชื่อคนปักไว้", async () => {
+    const decisionId = await decided("กติกาที่จะถูกถอดโดยอีกคน");
+    await callTool("set_decision_scope", {
+      decision_id: decisionId,
+      scope: "workspace",
+      approval_code: SECRET,
+    });
+
+    const removed = await callTool(
+      "set_decision_scope",
+      { decision_id: decisionId, scope: "project", approval_code: SECRET },
+      testEnv,
+      TEAM_OTHER,
+    );
+
+    expect(removed.scope).toBe("project");
+    expect(removed.standing_rule).toBe(false);
+    expect(removed.scope_set_by).toBe(TEAM_OTHER);
+    expect(await rules()).toEqual([]);
+  });
+
+  it("ปักซ้ำโดยคนอื่น ชื่อในบันทึกเปลี่ยนตาม ไม่ใช่ค้างที่คนแรก", async () => {
+    const decisionId = await decided("กติกาที่ถูกปักสองรอบ");
+    await callTool("set_decision_scope", {
+      decision_id: decisionId,
+      scope: "workspace",
+      approval_code: SECRET,
+    });
+
+    await callTool(
+      "set_decision_scope",
+      { decision_id: decisionId, scope: "workspace", approval_code: SECRET },
+      testEnv,
+      TEAM_OTHER,
+    );
+
+    expect((await rules())[0].scope_set_by).toBe(TEAM_OTHER);
+  });
+
+  it("รหัสผิด ไม่บันทึกอะไรเลย ไม่ใช่บันทึกความพยายาม", async () => {
+    const decisionId = await decided("กติกาที่จะลองด้วยรหัสผิด");
+
+    await expect(
+      callTool("set_decision_scope", {
+        decision_id: decisionId,
+        scope: "workspace",
+        approval_code: "รหัสมั่ว",
+      }),
+    ).rejects.toThrow(/approval_code/);
+
+    const row = await env.DB.prepare(
+      "SELECT scope, scope_set_by, scope_set_at FROM decisions WHERE id = ?1",
+    )
+      .bind(decisionId)
+      .first<{ scope: string; scope_set_by: string | null; scope_set_at: string | null }>();
+
+    expect(row).toEqual({ scope: "project", scope_set_by: null, scope_set_at: null });
   });
 });
