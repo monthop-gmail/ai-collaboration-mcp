@@ -993,6 +993,24 @@ export async function setDecisionScope(
   return { ...existing, scope, scope_set_by: author.name, scope_set_at: setAt };
 }
 
+export interface StandingRuleDetail extends StandingRule {
+  detail: string;
+  discussion_id: string | null;
+  decided_by: string | null;
+}
+
+/**
+ * เงื่อนไขว่าอะไรคือ "กติกาที่ยังใช้อยู่" — เขียนที่เดียว ใช้ทั้ง MCP และหน้าอ่าน
+ *
+ * เรียงด้วย `rowid` ต่อท้ายเพราะเวลาใน Workers ไม่ขยับระหว่างโค้ดที่รันติดกัน สองใบ
+ * ที่ปิดในจังหวะเดียวกันจะได้ `decided_at` เท่ากัน แล้วลำดับจะไม่แน่นอน — เป็นแผล
+ * เดียวกับที่ `HAS_NEWER_HANDOFF` เจอมาก่อน
+ */
+const STANDING_RULE_WHERE = `workspace_id = ?1 AND scope = 'workspace'
+          AND status = 'approved' AND superseded_by IS NULL`;
+
+const STANDING_RULE_ORDER = "decided_at, rowid";
+
 /**
  * กติกาที่ยังใช้อยู่ของ workspace — คืนแค่ตัวชี้กับหัวเรื่อง ไม่เอาเนื้อ
  *
@@ -1002,11 +1020,6 @@ export async function setDecisionScope(
  * ซึ่งแปลว่าคำแนะนำที่ว่า "ไปอ่านเอาเอง" จ่ายไม่ไหวอยู่แล้ววันนี้
  *
  * ตัดใบที่ถูกแทนแล้วออก ด้วยเกณฑ์เดียวกับ `plans_current`
- *
- * เรียงด้วย `rowid` ต่อท้ายเพราะเวลาใน Workers ไม่ขยับระหว่างโค้ดที่รันติดกัน สองใบ
- * ที่ปิดในจังหวะเดียวกันจะได้ `decided_at` เท่ากัน แล้วลำดับจะไม่แน่นอน — เป็นแผล
- * เดียวกับที่ `HAS_NEWER_HANDOFF` เจอมาก่อน ต่างกันแค่ที่นั่นทำให้ไม่มีใบไหนเหลือ
- * ให้รับ ส่วนที่นี่ทำให้กติกาสลับลำดับแบบสุ่มระหว่างการเรียกสองครั้ง
  */
 export async function readStandingRules(
   db: D1Database,
@@ -1015,13 +1028,36 @@ export async function readStandingRules(
   const { results } = await db
     .prepare(
       `SELECT id, title, decided_by_kind, decided_at, scope_set_by, scope_set_at
-         FROM decisions
-        WHERE workspace_id = ?1 AND scope = 'workspace'
-          AND status = 'approved' AND superseded_by IS NULL
-        ORDER BY decided_at, rowid`,
+         FROM decisions WHERE ${STANDING_RULE_WHERE} ORDER BY ${STANDING_RULE_ORDER}`,
     )
     .bind(workspaceId)
     .all<StandingRule>();
+
+  return results;
+}
+
+/**
+ * กติกาชุดเดียวกัน แต่เอาเนื้อมาด้วย — สำหรับหน้าอ่านของคน
+ *
+ * แยกจาก `readStandingRules` เพราะข้อจำกัดของผู้อ่านคนละอย่าง · ฝั่ง MCP ต้องประหยัด
+ * ที่สุดเพราะค่านี้ไปอยู่ใน `get_workspace_context` ซึ่งทุกตัวเรียกเป็นอันดับแรก ส่วน
+ * **คนที่เปิดหน้าเว็บมาอ่านกติกา ต้องการตัวกติกา ไม่ใช่ตัวชี้ไปหามัน**
+ *
+ * เงื่อนไขว่าอะไรคือกติกาที่ยังใช้อยู่ ใช้ค่าคงที่ตัวเดียวกันทั้งสองที่ ถ้าแยกกันเขียน
+ * วันหนึ่งสองหน้าจะตอบไม่ตรงกัน แล้วไม่มีใครรู้ว่าอันไหนถูก
+ */
+export async function readStandingRuleDetails(
+  db: D1Database,
+  workspaceId: string,
+): Promise<StandingRuleDetail[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, title, detail, discussion_id, decided_by, decided_by_kind, decided_at,
+              scope_set_by, scope_set_at
+         FROM decisions WHERE ${STANDING_RULE_WHERE} ORDER BY ${STANDING_RULE_ORDER}`,
+    )
+    .bind(workspaceId)
+    .all<StandingRuleDetail>();
 
   return results;
 }

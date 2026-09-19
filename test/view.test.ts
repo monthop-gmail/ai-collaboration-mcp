@@ -8,6 +8,7 @@ import {
   createTask,
   recordDecision,
   resolveDecision,
+  setDecisionScope,
   updateTask,
 } from "../src/db-work";
 import { handleView } from "../src/view";
@@ -418,5 +419,85 @@ describe("ป้าย contract บนหน้าอ่าน", () => {
 
     expect(html).toContain("<span title=");
     expect(html).toContain("client ถือ schema เก่าอยู่");
+  });
+});
+
+/**
+ * กติกาของโต๊ะบนหน้าอ่านของคน
+ *
+ * ฝั่ง MCP คืนแค่ตัวชี้กับหัวเรื่องเพราะต้องประหยัด — หน้านี้ต้องคืน**ตัวกติกา** เพราะ
+ * คนที่เปิดมาอ่านกติกาไม่ได้อยากได้ id ไปค้นต่อ เป็นผู้อ่านคนละชนิดที่มีข้อจำกัดคนละอย่าง
+ */
+describe("กติกาของโต๊ะบนหน้าอ่าน", () => {
+  const SECRET = "approval-secret-for-view-test";
+  const owner = { client: "c-owner", name: "monthop-gmail" };
+
+  async function page(): Promise<string> {
+    const res = await handleView(
+      get("/view", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    return res!.text();
+  }
+
+  /** ใบที่ปิดแล้ว พร้อมเนื้อที่คนต้องอ่าน */
+  async function approvedRule(title: string, detail: string): Promise<string> {
+    const decision = await recordDecision(env.DB, WS, title, detail, chatgpt);
+    await resolveDecision(env.DB, decision.id, "approved", "เหตุผล", chatgpt);
+    return decision.id;
+  }
+
+  it("ยังไม่มีใครปัก ต้องบอกว่าไม่มี ไม่ใช่เงียบ", async () => {
+    await approvedRule("ใบที่อนุมัติแล้วแต่ไม่ได้ปัก", "เนื้อของใบที่ไม่ใช่กติกา");
+
+    const html = await page();
+
+    // หัวข้อต้องอยู่เสมอ ไม่งั้นหน้าที่ว่างกับหน้าที่ไม่มีส่วนนี้ หน้าตาเหมือนกัน
+    expect(html).toContain("กติกาของโต๊ะ");
+    expect(html).toContain("ยังไม่มีใบไหนถูกปัก");
+    expect(html).not.toContain("เนื้อของใบที่ไม่ใช่กติกา");
+  });
+
+  it("ปักแล้วขึ้นพร้อมเนื้อกติกาและชื่อคนปัก", async () => {
+    const id = await approvedRule("ถ้ายังทำเองได้ให้เดินต่อ", "เนื้อกติกาที่คนต้องอ่านจริง");
+    await setDecisionScope(env.DB, id, "workspace", owner, {
+      code: SECRET,
+      secret: SECRET,
+    });
+
+    const html = await page();
+
+    expect(html).toContain("ถ้ายังทำเองได้ให้เดินต่อ");
+    expect(html).toContain("เนื้อกติกาที่คนต้องอ่านจริง");
+    expect(html).toContain("ปักโดย monthop-gmail");
+    expect(html).not.toContain("ยังไม่มีใบไหนถูกปัก");
+  });
+
+  /**
+   * `dec-9850cb54` ถูกปักก่อนที่คอลัมน์บันทึกจะมีอยู่ ช่องจึงว่าง — หน้าต้องพูดออกมา
+   * ว่าไม่มีบันทึก ไม่ใช่ปล่อยบรรทัดว่างให้คนเดาเอาว่าไม่มีใครปักหรือระบบไม่ได้เก็บ
+   */
+  it("ใบที่ถูกปักก่อนระบบเริ่มบันทึก ต้องบอกว่าไม่มีบันทึก", async () => {
+    const id = await approvedRule("กติกาที่ปักไว้ก่อนมีคอลัมน์", "เนื้อกติกา");
+    await env.DB.prepare("UPDATE decisions SET scope = 'workspace' WHERE id = ?1")
+      .bind(id)
+      .run();
+
+    const html = await page();
+
+    expect(html).toContain("กติกาที่ปักไว้ก่อนมีคอลัมน์");
+    expect(html).toContain("ไม่มีบันทึก");
+  });
+
+  it("ถอดออกแล้วหายจากหน้า ไม่ค้างอยู่", async () => {
+    const id = await approvedRule("กติกาที่จะถูกถอด", "เนื้อกติกาที่จะหายไป");
+    await setDecisionScope(env.DB, id, "workspace", owner, { code: SECRET, secret: SECRET });
+    expect(await page()).toContain("เนื้อกติกาที่จะหายไป");
+
+    await setDecisionScope(env.DB, id, "project", owner, { code: SECRET, secret: SECRET });
+
+    const html = await page();
+    expect(html).not.toContain("เนื้อกติกาที่จะหายไป");
+    expect(html).toContain("ยังไม่มีใบไหนถูกปัก");
   });
 });

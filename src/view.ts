@@ -14,7 +14,13 @@
  */
 
 import { readMessages, readWorkspaceContext, getDiscussion } from "./db";
-import { readDecisions, readHandoffs, readOpenItems, readTasks } from "./db-work";
+import {
+  readDecisions,
+  readHandoffs,
+  readOpenItems,
+  readStandingRuleDetails,
+  readTasks,
+} from "./db-work";
 import { secretsMatch } from "./http";
 import { CONTRACT_VERSION } from "./tool-kit";
 import type { Env } from "./env";
@@ -131,9 +137,59 @@ function page(title: string, body: string): Response {
   );
 }
 
+/**
+ * กติกาของโต๊ะ — อยู่บนสุดก่อนรายการกระทู้ ด้วยเหตุผลเดียวกับที่ `standing_rules`
+ * อยู่ก่อน `open_items` ในผลลัพธ์ของ MCP คือ **กติกาต้องอ่านก่อนตัดสินใจว่าจะทำงาน
+ * อย่างไร ไม่ใช่เจอทีหลังตอนที่ทำผิดไปแล้ว**
+ *
+ * ต่างจากฝั่ง MCP ตรงที่เอาเนื้อมาด้วย เพราะคนที่เปิดหน้านี้มาอ่านกติกา ต้องการตัว
+ * กติกา ไม่ใช่ตัวชี้ไปหามัน
+ *
+ * ไม่มีกติกาเลยก็ยังบอก ไม่ใช่เงียบ — หน้าที่ว่างเปล่ากับหน้าที่ไม่มีส่วนนี้อยู่
+ * หน้าตาเหมือนกันจากสายตาคนอ่าน ซึ่งเป็นความล้มเหลวชนิดที่ repo นี้ไล่แก้มาตลอด
+ */
+function renderRules(
+  rules: Awaited<ReturnType<typeof readStandingRuleDetails>>,
+  workspace: string,
+): string {
+  const heading = `<h2 class="section" id="rules">กติกาของโต๊ะ</h2>`;
+
+  if (rules.length === 0) {
+    return (
+      heading +
+      `<div class="muted" style="margin-top:8px">ยังไม่มีใบไหนถูกปักเป็นกติกาของ workspace นี้ ` +
+      `— ปักได้ด้วย <code>set_decision_scope</code> ซึ่งต้องใช้รหัสของเซิร์ฟเวอร์</div>`
+    );
+  }
+
+  const rows = rules
+    .map((r) => {
+      // ใครปักกับใครปิดใบ คนละเหตุการณ์ คนละหลักฐาน จึงแยกบรรทัดกันชัด ๆ
+      const pinned = r.scope_set_by
+        ? `ปักโดย ${esc(r.scope_set_by)} · ${when(r.scope_set_at)}`
+        : "ปักก่อนที่ระบบจะเริ่มบันทึกว่าใครปัก — ไม่มีบันทึก";
+      const closed = r.decided_by
+        ? `ปิดโดย ${esc(r.decided_by)} (${esc(r.decided_by_kind ?? "")}) · ${when(r.decided_at)}`
+        : "ยังไม่มีใครเคาะ";
+
+      return (
+        `<div class="item"><h2>${tag("กติกา")}${esc(r.title)}</h2>` +
+        `<div class="muted">${pinned}</div>` +
+        `<div class="muted">${closed}</div>` +
+        source(r.discussion_id, workspace) +
+        fold("อ่านกติกาเต็ม", r.detail) +
+        `</div>`
+      );
+    })
+    .join("");
+
+  return heading + rows;
+}
+
 function renderList(
   context: Awaited<ReturnType<typeof readWorkspaceContext>>,
   open: Awaited<ReturnType<typeof readOpenItems>>,
+  rules: Awaited<ReturnType<typeof readStandingRuleDetails>>,
   workspace: string,
 ): Response {
   const tasks = Object.entries(open.tasks)
@@ -165,8 +221,11 @@ function renderList(
       `<span><a href="${items}#handoffs"><b>${open.handoffs_pending}</b> handoff รอคนรับ</a></span>` +
       `<span><a href="${items}#handoffs"><b>${open.handoffs_inactive}</b> handoff ตกยุค</a></span>` +
       `<span><a href="${items}#tasks">งานค้าง: ${tasks || "ไม่มี"}</a></span>` +
+      `<span><a href="#rules"><b>${rules.length}</b> กติกาของโต๊ะ</a></span>` +
       `<span title="${esc(CONTRACT_TITLE)}">contract ${CONTRACT_VERSION}</span>` +
       `</div>` +
+      renderRules(rules, workspace) +
+      `<h2 class="section">กระทู้</h2>` +
       rows +
       (context.has_more
         ? `<div class="note">แสดง ${context.discussions.length} จาก ${context.total_discussions} กระทู้</div>`
@@ -454,13 +513,14 @@ export async function handleView(request: Request, env: Env): Promise<Response |
     }
     if (id) return await renderDiscussion(env, id, workspace);
 
-    const [context, open] = await Promise.all([
+    const [context, open, rules] = await Promise.all([
       readWorkspaceContext(env.DB, workspace, DISCUSSION_LIMIT),
       // ชื่อว่างโดยตั้งใจ — หน้านี้ไม่มีตัวตนของผู้เรียก จึงไม่มี waiting_for_you
       // ให้แสดง ตัวเลขที่เหลือเป็นของทั้ง workspace ซึ่งเป็นสิ่งที่คนอ่านอยากรู้
       readOpenItems(env.DB, workspace, ""),
+      readStandingRuleDetails(env.DB, workspace),
     ]);
-    return renderList(context, open, workspace);
+    return renderList(context, open, rules, workspace);
   } catch (error) {
     // ไม่พบ workspace หรือ discussion เป็นคำขอที่ผิด ไม่ใช่ระบบพัง
     return page(
