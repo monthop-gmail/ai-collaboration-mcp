@@ -501,3 +501,55 @@ describe("กติกาของโต๊ะบนหน้าอ่าน", (
     expect(html).toContain("ยังไม่มีใบไหนถูกปัก");
   });
 });
+
+/**
+ * เลขกระทู้บนหน้าอ่าน — ทีมงานขอมาเพราะเห็น AI อ้างถึงกระทู้ในข้อความแล้วอยากตามไปส่อง
+ *
+ * ของที่ต้องตรงกันคือ **สิ่งที่ตาคนกวาดหาบนหน้าจอ กับสิ่งที่พิมพ์อยู่ในข้อความ** —
+ * AI เขียนว่า `dis-6c9dd6e3` หน้าจอจึงต้องขึ้นแบบนั้นเป๊ะ ไม่ใช่รูปอื่นที่แปลงกันเองได้
+ */
+describe("เลขกระทู้บนหน้าอ่าน", () => {
+  async function listPage(): Promise<string> {
+    const res = await handleView(
+      get("/view", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    return res!.text();
+  }
+
+  it("หน้ารายการขึ้นรูปย่อแบบเดียวกับที่ AI อ้างถึงกันในกระทู้", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้ที่จะตามไปส่อง", chatgpt);
+
+    const html = await listPage();
+
+    // สิบสองตัวแรก = `dis-` บวกแปดตัว ซึ่งเป็นรูปที่ใช้เรียกกันจริงในโต๊ะ
+    expect(html).toContain(d.id.slice(0, 12));
+  });
+
+  /**
+   * `get_discussion` เทียบ id แบบตรงตัว ส่งรูปย่อไปจะไม่พบ — คนที่เปิดหน้ากระทู้มัก
+   * กำลังจะเอา id ไปให้ AI ต่อ จึงต้องได้ตัวที่ใช้ได้จริง ไม่ใช่ตัวที่เห็นในข้อความ
+   */
+  it("หน้ากระทู้ขึ้น id เต็ม เพราะรูปย่อใช้เรียก tool ไม่ได้", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+
+    const res = await handleView(
+      get(`/view/${d.id}`, { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain(d.id);
+  });
+
+  it("หลายกระทู้ได้เลขคนละตัว ไม่ใช่ตัวเดียวกันทั้งหน้า", async () => {
+    const a = await createDiscussion(env.DB, WS, "กระทู้ ก", chatgpt);
+    const b = await createDiscussion(env.DB, WS, "กระทู้ ข", claude);
+
+    const html = await listPage();
+
+    expect(html).toContain(a.id.slice(0, 12));
+    expect(html).toContain(b.id.slice(0, 12));
+    expect(a.id.slice(0, 12)).not.toBe(b.id.slice(0, 12));
+  });
+});

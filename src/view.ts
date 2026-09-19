@@ -125,6 +125,8 @@ details { margin-top: 8px; }
 summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 details .body { margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--line); }
 h2.section { margin: 32px 0 0; font-size: 17px; scroll-margin-top: 12px; }
+code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px;
+  overflow-wrap: anywhere; }
 `;
 
 function page(title: string, body: string): Response {
@@ -201,7 +203,8 @@ function renderList(
       (d) =>
         `<a class="row" href="${VIEW_ROUTE}/${esc(d.id)}?ws=${esc(workspace)}">` +
         `<h2>${esc(d.title)}</h2>` +
-        `<div class="muted">${d.message_count} ข้อความ · เปิดโดย ${esc(d.created_by)} · ` +
+        `<div class="muted"><code>${esc(shortId(d.id))}</code> · ` +
+        `${d.message_count} ข้อความ · เปิดโดย ${esc(d.created_by)} · ` +
         `ล่าสุด ${when(d.last_activity)}</div>` +
         `<div class="muted">${esc(d.participants.join(" · "))}</div></a>`,
     )
@@ -261,6 +264,9 @@ async function renderDiscussion(
       `<a class="muted" href="${VIEW_ROUTE}?ws=${esc(workspace)}">← กลับ</a></div>` +
       `<div class="muted">เปิดโดย ${esc(discussion.created_by)} · ${when(discussion.created_at)} · ` +
       `${page_.total} ข้อความ</div>` +
+      // id เต็ม ไม่ใช่รูปย่อ — `get_discussion` เทียบ id แบบตรงตัว ส่งรูปย่อไปจะไม่พบ
+      // คนที่มาถึงหน้านี้มักกำลังจะเอา id ไปให้ AI ต่อ จึงต้องได้ตัวที่ใช้ได้จริง
+      `<div class="muted">id <code>${esc(discussion.id)}</code></div>` +
       messages +
       (page_.has_more
         ? `<div class="note">แสดง ${page_.messages.length} จาก ${page_.total} ข้อความ</div>`
@@ -279,6 +285,20 @@ async function renderDiscussion(
 function fold(label: string, body: string): string {
   if (!body.trim()) return "";
   return `<details><summary>${esc(label)}</summary><div class="body">${esc(body)}</div></details>`;
+}
+
+/**
+ * รูปย่อของ id ที่คนใช้เรียกกันจริง เช่น `dis-6c9dd6e3`
+ *
+ * ตัดที่แปดตัวตายตัว **เพื่อให้ตรงกับที่ AI อ้างถึงกันในกระทู้** ไม่ใช่เพื่อประหยัดที่ —
+ * ทีมงานบอกว่าเห็น AI คุยกันแล้วอยากตามไปส่องกระทู้ถูกอัน ของที่ต้องตรงกันคือสิ่งที่
+ * ตาคนกวาดหาบนหน้าจอ กับสิ่งที่พิมพ์อยู่ในข้อความ
+ *
+ * ไม่ได้คำนวณความยาวที่สั้นที่สุดที่ยังไม่ชนกัน เพราะความยาวที่เปลี่ยนไปมาจะทำให้
+ * เทียบด้วยสายตายากขึ้น ซึ่งแพงกว่าความเสี่ยงที่ prefix แปดตัวจะชนกันมาก
+ */
+function shortId(id: string): string {
+  return id.slice(0, 12);
 }
 
 function tag(text: string): string {
