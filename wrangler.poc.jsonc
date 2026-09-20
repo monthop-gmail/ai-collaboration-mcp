@@ -20,11 +20,11 @@
   // ชุดนี้ไปใช้กับของจริง จะต่อไม่ติดทันที ไม่ใช่ต่อติดแล้วเชื่อโทเคนผิดชุด
   "vars": {
     "CLIENT_NAME_ALIASES": "Google=Gemini",
-    "GATEWAY_JWT_ISSUER": "https://gw-test.internal-mcp-gateway.invalid/mcp",
-    "GATEWAY_JWT_AUDIENCE": "mcp://gw-test.internal-mcp-gateway.invalid/connector/collab-readonly-test",
+    "GATEWAY_JWT_ISSUER": "https://internal-mcp-gateway-test.monthop-gmail.workers.dev/mcp",
+    "GATEWAY_JWT_AUDIENCE": "mcp://internal-mcp-gateway-test.monthop-gmail.workers.dev/connector/collab-readonly-test",
     "GATEWAY_CONNECTOR_ID": "collab-readonly-test",
-    "GATEWAY_JWKS_SOURCE": "gateway-test",
-    "GATEWAY_JWKS": "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"vCboCp23-YotAfaHxYaaDG2_p7Cy7iOWuA4rFZAoPR-FQCeWzSrwneLoLHQc-bdyVmTQBJxukvspUUul4VpXM6cC4D8iieAWaGVrrGGJ4gyTNOooWc9p7iECLcpauI1jBk9GnEwgoBtNNpohoP0pUo0i7GbDLv0pZyiH5-GjXUT-b7FIPZhTU1oIWEkxLgQbkYPR9t3kFPpp0ML3wk2wgAtgtE2AmD_6CGfwObQojCPXIipxgvZoGkJtjzWMPpoNxqUOn1Fkyh0MRWWf7LySdR0BS0SNs5ri1IO6jhXxU4u8Z7om7vMjiGKbph-P_ehXhbypGo2ByJ2zTntrhJNucw\",\"e\":\"AQAB\",\"kid\":\"gw-test-1\",\"alg\":\"RS256\",\"use\":\"sig\"}]}"
+    "GATEWAY_JWKS_SOURCE": "gateway",
+    "GATEWAY_JWKS": "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"j1sWojVDVkQqwZaFzd-9Bmp63n_yc6GJzIIraooP8Rcfq_kwfZ_VSAtBb6uaLtC_lhjpEvYPv1mXOz6mr8EImdsZ7RGdmdkogb11BZDQCqtJjPJ0w2sn27xgali12jegR1JpviTjM3sucIAEXxE_y-LrXi-xyLxS77EHvS2Ijyj-szIzQbusXOmhQXgROtvNNhJRmJVCFM6zsDPs_k4NHv8GAj9t66K84PGw8H7qU7jU1-AI43HwqVmlU-Ki1m6bpu_gIq7Xe9YHisup7-vyhU-Jgul-xgNIVGNbLDWsN1T79un8Kp4zD9pFKeFF1o5f_qbd1BUw8tb_FvQ5jHO5YQ\",\"e\":\"AQAB\",\"kid\":\"gw-2026-09-18-1\",\"alg\":\"RS256\",\"use\":\"sig\"}]}"
   },
   "kv_namespaces": [
     {
