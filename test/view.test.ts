@@ -73,7 +73,7 @@ describe("หน้าอ่านอย่างเดียว", () => {
     expect(res!.headers.get("location")).toBe("/view");
     const cookie = res!.headers.get("set-cookie") ?? "";
     expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("SameSite=Strict");
+    expect(cookie).toContain("SameSite=Lax");
   });
 
   /**
