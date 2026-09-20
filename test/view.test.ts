@@ -553,3 +553,60 @@ describe("เลขกระทู้บนหน้าอ่าน", () => {
     expect(a.id.slice(0, 12)).not.toBe(b.id.slice(0, 12));
   });
 });
+
+/**
+ * ผู้เขียนข้อความล่าสุดบนหน้ารายการ — ทีมงานขอมาคู่กับ "เปิดโดย"
+ *
+ * ข้อที่ต้องคุมไม่ใช่แค่ว่ามีชื่อโผล่ แต่คือ **ชื่อที่โผล่เป็นคนล่าสุดจริง** เพราะ query
+ * มี `MAX()` สองตัว การรับประกันเรื่องคอลัมน์เปล่าของ SQLite จึงใช้ไม่ได้ ถ้าเขียนแบบ
+ * คอลัมน์เปล่าจะได้ชื่อจากแถวไหนก็ได้โดยไม่มีอะไรฟ้อง
+ */
+describe("ผู้เขียนข้อความล่าสุดบนหน้ารายการ", () => {
+  async function listPage(): Promise<string> {
+    const res = await handleView(
+      get("/view", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    return res!.text();
+  }
+
+  it("ขึ้นชื่อคนที่โพสต์ล่าสุด ไม่ใช่คนที่เปิดกระทู้", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้ที่มีคนตอบทีหลัง", chatgpt);
+    await postMessage(env.DB, d.id, "note", "ข้อความแรก", chatgpt);
+    await postMessage(env.DB, d.id, "note", "ข้อความหลัง", claude);
+
+    const html = await listPage();
+
+    expect(html).toContain("เปิดโดย ChatGPT");
+    expect(html).toContain(`โดย ${claude.name}`);
+  });
+
+  /**
+   * คนเดิมโพสต์หลายครั้งต้องไม่ทำให้ชื่อเพี้ยน และคนที่เคยโพสต์ก่อนหน้าต้องไม่ถูกหยิบมา
+   * — เคสนี้คือเคสที่คอลัมน์เปล่าจะพลาดได้เงียบ ๆ
+   */
+  it("คนที่โพสต์ก่อนหน้าไม่ถูกหยิบมาเป็นคนล่าสุด", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้ที่คนแรกโพสต์สองครั้ง", claude);
+    await postMessage(env.DB, d.id, "note", "หนึ่ง", claude);
+    await postMessage(env.DB, d.id, "note", "สอง", claude);
+    await postMessage(env.DB, d.id, "note", "สาม", chatgpt);
+
+    const html = await listPage();
+    const row = html.slice(html.indexOf("กระทู้ที่คนแรกโพสต์สองครั้ง"));
+    // ตัดตั้งแต่คำว่า "ล่าสุด" เท่านั้น เพราะ "เปิดโดย Claude" มีคำว่า "โดย Claude"
+    // เป็นสตริงย่อยอยู่แล้ว — ถ้าตัดจากหัวแถว เทสต์จะฟ้องทั้งที่โค้ดถูก
+    const latest = row.slice(row.indexOf("ล่าสุด"));
+    const meta = latest.slice(0, latest.indexOf("</div>"));
+
+    expect(meta).toContain(`โดย ${chatgpt.name}`);
+    expect(meta).not.toContain(`โดย ${claude.name}`);
+  });
+
+  it("กระทู้ที่ยังไม่มีข้อความ บอกว่ายังไม่มี ไม่ใช่ปล่อยคำว่าล่าสุดห้อยไว้", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้ที่เพิ่งเปิดและยังเงียบ", chatgpt);
+
+    const html = await listPage();
+
+    expect(html).toContain("ยังไม่มีข้อความ");
+  });
+});

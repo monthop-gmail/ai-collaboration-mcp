@@ -205,7 +205,12 @@ function renderList(
         `<h2>${esc(d.title)}</h2>` +
         `<div class="muted"><code>${esc(shortId(d.id))}</code> · ` +
         `${d.message_count} ข้อความ · เปิดโดย ${esc(d.created_by)} · ` +
-        `ล่าสุด ${when(d.last_activity)}</div>` +
+        // กระทู้ที่ยังไม่มีข้อความต้องพูดออกมา ไม่ใช่ปล่อยคำว่า "ล่าสุด" ห้อยไว้เฉย ๆ
+        // แล้วให้คนเดาว่าข้อมูลหายหรือยังไม่มีใครตอบ
+        (d.last_author
+          ? `ล่าสุด ${when(d.last_activity)} โดย ${esc(d.last_author)}`
+          : "ยังไม่มีข้อความ") +
+        `</div>` +
         `<div class="muted">${esc(d.participants.join(" · "))}</div></a>`,
     )
     .join("");

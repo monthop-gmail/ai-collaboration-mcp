@@ -218,6 +218,8 @@ export interface DiscussionSummary {
   message_count: number;
   latest_seq: number;
   last_activity: string | null;
+  /** ผู้เขียนข้อความล่าสุด — `null` เมื่อกระทู้ยังไม่มีข้อความเลย */
+  last_author: string | null;
   participants: string[];
 }
 
@@ -269,6 +271,18 @@ export async function readWorkspaceContext(
               COUNT(m.id)              AS message_count,
               COALESCE(MAX(m.seq), 0)  AS latest_seq,
               MAX(m.created_at)        AS last_activity,
+              -- ผู้เขียนข้อความล่าสุด ต้องเป็น subquery ไม่ใช่คอลัมน์เปล่า
+              --
+              -- SQLite รับประกันว่าคอลัมน์เปล่าจะมาจากแถวเดียวกับ min/max **ก็ต่อเมื่อ
+              -- ทั้ง query มี min หรือ max อยู่ตัวเดียว** · ที่นี่มีสองตัวคือ MAX(m.seq)
+              -- กับ MAX(m.created_at) การรับประกันจึงเป็นโมฆะ และชื่อที่ได้จะมาจาก
+              -- แถวไหนก็ได้โดยไม่มีอะไรฟ้อง
+              --
+              -- เรียงด้วย seq ไม่ใช่ created_at เพราะ seq เป็นลำดับที่ database
+              -- รับประกันความไม่ซ้ำ ส่วนเวลาใน Workers ไม่ขยับระหว่างคำขอที่ติดกัน
+              (SELECT m2.author_name FROM messages m2
+                WHERE m2.discussion_id = d.id
+                ORDER BY m2.seq DESC LIMIT 1) AS last_author,
               GROUP_CONCAT(DISTINCT m.author_name) AS authors
          FROM discussions d
          LEFT JOIN messages m ON m.discussion_id = d.id
@@ -287,6 +301,7 @@ export async function readWorkspaceContext(
       message_count: number;
       latest_seq: number;
       last_activity: string | null;
+      last_author: string | null;
       authors: string | null;
     }>();
 
@@ -336,6 +351,7 @@ export async function readWorkspaceContext(
       message_count: r.message_count,
       latest_seq: r.latest_seq,
       last_activity: r.last_activity,
+      last_author: r.last_author,
       participants: r.authors ? r.authors.split(",") : [],
     })),
     has_more: hasMore,
