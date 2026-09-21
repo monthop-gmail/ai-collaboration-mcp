@@ -4,6 +4,17 @@ export interface Env {
   DB: D1Database;
   /** KV ที่ OAuth provider ใช้เก็บ client ที่ลงทะเบียน grant และ token */
   OAUTH_KV: KVNamespace;
+  /**
+   * commit ที่ deployment นี้ถูก build มาจาก — ฝังตอน deploy ด้วย `scripts/deploy.sh`
+   *
+   * มีเพราะ **production ตอบไม่ได้ว่าตัวเองรันอะไรอยู่** · `wrangler deployments list`
+   * ให้แค่เวลากับ version id ช่อง message ว่างเปล่า คนที่อยากรู้ต้องจับเวลา deploy
+   * มาเทียบกับเวลา commit เอง ซึ่งเดาผิดได้ และเคยเดาผิดมาแล้วจริง
+   *
+   * ไม่มีค่า = ถูก deploy ด้วยมือโดยไม่ผ่านสคริปต์ ซึ่งต้องแสดงออกมาตรง ๆ ว่าไม่ทราบ
+   * ไม่ใช่เดาให้
+   */
+  COMMIT_SHA?: string;
   /** bearer token สำหรับ client ที่ตั้ง header เองได้ และเป็นรหัสบนหน้า consent */
   MCP_AUTH_TOKEN?: string;
   /** ชื่อที่จะใช้เมื่อเข้ามาทางเส้น static bearer ซึ่งไม่มี identity จาก OAuth */

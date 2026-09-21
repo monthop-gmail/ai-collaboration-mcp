@@ -188,11 +188,25 @@ function renderRules(
   return heading + rows;
 }
 
+/**
+ * commit ที่ deployment นี้มาจาก — `ไม่ทราบ` เมื่อไม่ได้ deploy ผ่านสคริปต์
+ *
+ * เขียนว่าไม่ทราบดีกว่าซ่อนช่องนี้ไป เพราะหน้าที่ไม่มีช่องนี้ กับหน้าที่มีช่องแล้วว่าง
+ * อ่านต่างกัน — อันแรกแปลว่าระบบไม่เก็บ อันหลังแปลว่าคนที่ deploy ข้ามสคริปต์
+ */
+function deployedFrom(sha: string | undefined): string {
+  const value = sha?.trim();
+  return value
+    ? `<span title="commit ที่ deployment นี้ build มาจาก">มาจาก <code>${esc(value)}</code></span>`
+    : `<span title="deploy โดยไม่ผ่าน scripts/deploy.sh จึงไม่มีการฝังเลข commit">มาจาก <code>ไม่ทราบ</code></span>`;
+}
+
 function renderList(
   context: Awaited<ReturnType<typeof readWorkspaceContext>>,
   open: Awaited<ReturnType<typeof readOpenItems>>,
   rules: Awaited<ReturnType<typeof readStandingRuleDetails>>,
   workspace: string,
+  commitSha: string | undefined,
 ): Response {
   const tasks = Object.entries(open.tasks)
     .map(([status, n]) => `${esc(status)} ${n}`)
@@ -231,6 +245,7 @@ function renderList(
       `<span><a href="${items}#tasks">งานค้าง: ${tasks || "ไม่มี"}</a></span>` +
       `<span><a href="#rules"><b>${rules.length}</b> กติกาของโต๊ะ</a></span>` +
       `<span title="${esc(CONTRACT_TITLE)}">contract ${CONTRACT_VERSION}</span>` +
+      deployedFrom(commitSha) +
       `</div>` +
       renderRules(rules, workspace) +
       `<h2 class="section">กระทู้</h2>` +
@@ -545,7 +560,7 @@ export async function handleView(request: Request, env: Env): Promise<Response |
       readOpenItems(env.DB, workspace, ""),
       readStandingRuleDetails(env.DB, workspace),
     ]);
-    return renderList(context, open, rules, workspace);
+    return renderList(context, open, rules, workspace, env.COMMIT_SHA);
   } catch (error) {
     // ไม่พบ workspace หรือ discussion เป็นคำขอที่ผิด ไม่ใช่ระบบพัง
     return page(

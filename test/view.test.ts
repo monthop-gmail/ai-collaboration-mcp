@@ -610,3 +610,42 @@ describe("ผู้เขียนข้อความล่าสุดบน�
     expect(html).toContain("ยังไม่มีข้อความ");
   });
 });
+
+/**
+ * commit ที่ deployment รันอยู่ ต้องอ่านได้ ไม่ใช่เดาจากเวลา
+ *
+ * 21 ก.ย. ตอนไล่หาว่า production รันโค้ดจาก commit ไหน คำตอบแรกผิด เพราะต้องจับเวลา
+ * deploy มาเทียบกับเวลา commit เอง — `wrangler deployments list` ให้แค่เวลากับ version id
+ *
+ * ถ้าคำถามพื้นฐานที่สุดว่า "ตอนนี้รันอะไรอยู่" ยังต้องอนุมาน คำถามที่ยากกว่านั้น
+ * จะไม่มีใครถามเลย
+ */
+describe("commit ที่ deployment รันอยู่", () => {
+  async function listPage(env: Env): Promise<string> {
+    const res = await handleView(get("/view", { cookie: `collab_view=${TOKEN}` }), env);
+    return res!.text();
+  }
+
+  it("ฝังไว้ตอน deploy แล้ว หน้าอ่านต้องขึ้นเลขนั้น", async () => {
+    const html = await listPage({ ...withToken(TOKEN), COMMIT_SHA: "a1b2c3d" } as Env);
+
+    expect(html).toContain("a1b2c3d");
+    expect(html).not.toContain("ไม่ทราบ");
+  });
+
+  /**
+   * ไม่มีค่า แปลว่ามีคน deploy ข้ามสคริปต์ — ต้องพูดออกมา ไม่ใช่ซ่อนช่องไป
+   * เพราะหน้าที่ไม่มีช่องนี้ กับหน้าที่มีช่องแล้วว่าง อ่านต่างกันคนละเรื่อง
+   */
+  it("ไม่มีค่า ต้องเขียนว่าไม่ทราบ ไม่ใช่ซ่อนช่องไปเฉย ๆ", async () => {
+    const html = await listPage(withToken(TOKEN));
+
+    expect(html).toContain("ไม่ทราบ");
+  });
+
+  it("ค่าที่เป็นช่องว่างล้วน นับเป็นไม่ทราบ ไม่ใช่ขึ้นช่องว่าง", async () => {
+    const html = await listPage({ ...withToken(TOKEN), COMMIT_SHA: "   " } as Env);
+
+    expect(html).toContain("ไม่ทราบ");
+  });
+});
