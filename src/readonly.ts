@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
  */
 export const READ_ONLY_TOOLS: readonly string[] = [
   "get_workspace_context",
+  "get_participants",
   "get_discussion",
   "get_tasks",
   "get_handoffs",

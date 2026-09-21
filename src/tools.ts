@@ -13,6 +13,7 @@ import {
 } from "./db";
 import { CONTRACT_VERSION, Limit, QuietForDays, Workspace, registerTool, run } from "./tool-kit";
 import { readOpenItems, readStandingRules } from "./db-work";
+import { readParticipants } from "./participants";
 import { registerWorkTools } from "./tools-work";
 
 const Kind = z
@@ -157,12 +158,46 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
 
   registerTool(
     server,
+    "get_participants",
+    {
+      description:
+        "What the server has actually observed about each name here — separately " +
+        "for speaking and for doing. 'spoke' counts messages; 'acted' counts work " +
+        "that left a trace: handoffs accepted, tasks created or updated, " +
+        "discussions opened, decisions proposed or closed, plans recorded. A team " +
+        "that works without posting has an empty 'spoke' and a full 'acted'; the " +
+        "plain participant list in get_workspace_context would miss it entirely. " +
+        "'clients' shows the distinct keys seen under that name — more than one " +
+        "means the label covers more than one identity. These are observations, " +
+        "NOT a judgement: you cannot conclude from this that a name exists, is " +
+        "available, is trustworthy, or is one person. Read 'limitations' before " +
+        "using any of it to decide where to send work.",
+      inputSchema: z.object({ workspace: Workspace }),
+    },
+    async ({ workspace }) =>
+      run(async () => {
+        const report = await readParticipants(env.DB, workspace);
+        return {
+          contract: CONTRACT_VERSION,
+          workspace,
+          total: report.participants.length,
+          participants: report.participants,
+          limitations: report.limitations,
+        };
+      }),
+  );
+
+  registerTool(
+    server,
     "get_workspace_context",
     {
       description:
         "Catch up on the workspace without reading every discussion. Returns the " +
         "discussions, who has taken part, what is still open, and — under " +
-        "'waiting_for_you' — the work addressed to you by name, split into " +
+        "'waiting_for_you' — the work addressed to you by name. Note that " +
+        "'participants' lists only names that have POSTED a message; a team " +
+        "that works without posting is absent from it. Call get_participants " +
+        "when you need who has actually acted. Split into " +
         "'unaccepted' (handoffs to accept and tasks nobody has started) and " +
         "'in_progress' (what you already took on). Under 'health' you get the same " +
         "kind of facts about the whole workspace rather than about you: pending " +
