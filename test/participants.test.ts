@@ -11,6 +11,12 @@ import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { resetDatabase } from "./apply-schema";
+import {
+  CLIENT_PREFIX,
+  MECHANISMS,
+  STATIC_BEARER_CLIENT,
+  mechanismOfClient,
+} from "../src/identity";
 
 const TOKEN = "parts-token-aaaaaaaaaaaaaaaaaaaaaaaa";
 /** โทเคนใบที่สองที่ผูกชื่อไว้ — ทำให้ชื่อเดียวมาจากสองกุญแจ เหมือนเคส ChatGPT ของจริง */
@@ -31,12 +37,12 @@ const testEnv = {
 let id = 0;
 
 async function callTool(
-  as: string | { token: string },
+  as: string | { token: string } | null,
   name: string,
   args: Record<string, unknown> = {},
   path = "/mcp",
 ): Promise<Record<string, unknown>> {
-  const bound = typeof as === "object";
+  const bound = as !== null && typeof as === "object";
   const ctx = createExecutionContext();
   const response = await worker.fetch(
     new Request(`https://example.test${path}`, {
@@ -45,7 +51,7 @@ async function callTool(
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
         authorization: `Bearer ${bound ? as.token : TOKEN}`,
-        ...(bound ? {} : { "x-client-name": as }),
+        ...(bound || as === null ? {} : { "x-client-name": as }),
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
@@ -206,5 +212,64 @@ describe("รายละเอียดที่ต้องถูก", () => {
     )) as unknown as { participants: Observation[] };
 
     expect(find(viaReadonly.participants, TEAM_A)?.acted?.events).toBe(1);
+  });
+});
+
+/**
+ * กลไกที่รายงาน ต้องเป็นทางเข้าจริง ไม่ใช่ค่าที่เหลือจากการเดา
+ *
+ * รุ่นแรกของ tool นี้รู้จักแค่ `static-token:` กับ `static-header:` แล้ว fallback ที่เหลือ
+ * เป็น `oauth` ทั้งหมด · พอรันกับโต๊ะจริงครั้งแรกก็เห็นทันทีว่า `Claude Code` ซึ่งเข้ามา
+ * ทาง static bearer ถูกรายงานว่า `oauth` — **ผิดแบบที่ดูน่าเชื่อ** ซึ่งแย่กว่าไม่รู้
+ *
+ * และ `limitations` สี่ข้อของรุ่นแรกไม่มีข้อไหนครอบเรื่องนี้เลย
+ */
+describe("กลไกของทางเข้า", () => {
+  it("โทเคนกลางที่ไม่ผูกชื่อ ขึ้นเป็น static-bearer ไม่ใช่ oauth", async () => {
+    await callTool(null, "create_task", { title: "ใบจากโทเคนกลาง" });
+
+    const row = (await report()).participants.find((p) => p.clients.length > 0);
+
+    expect(row?.clients[0].client).toBe(STATIC_BEARER_CLIENT);
+    expect(row?.clients[0].mechanism).toBe("static-bearer");
+  });
+
+  /**
+   * ด่านกันตารางสองฝั่งเพี้ยนกัน — `identity.ts` สร้างรหัส client จาก `CLIENT_PREFIX`
+   * และอ่านกลับด้วย `mechanismOfClient()` จากตารางเดียวกัน
+   *
+   * ถ้ามีคนเพิ่ม `source` ชนิดใหม่แล้วลืมใส่คำนำหน้า เทสต์นี้จะแดงทันที · ถ้าไม่มีด่านนี้
+   * ชนิดใหม่จะเงียบ ๆ กลายเป็น `oauth` เหมือนที่ `jwt:` กับ `static-bearer` เคยเป็น
+   */
+  it("ทุก source ที่ identity รู้จัก อ่านกลับได้เป็นกลไกที่ไม่ใช่ค่าที่เหลือ", () => {
+    const sources = Object.keys(CLIENT_PREFIX) as Array<keyof typeof CLIENT_PREFIX>;
+    expect(sources.length).toBeGreaterThan(0);
+
+    const seen = new Set<string>();
+
+    for (const source of sources) {
+      const prefix = CLIENT_PREFIX[source];
+
+      // `config` เป็นข้อยกเว้นเดียวที่ตั้งใจให้ไม่มีคำนำหน้า เพราะโทเคนกลางที่ตั้งชื่อไว้
+      // ไม่มีอะไรผูกกับรหัสให้แยกออกจากโทเคนกลางที่ไม่ตั้ง · ชนิดอื่นที่ปล่อยว่างจะถูก
+      // **กลืนเป็น static-bearer เงียบ ๆ** ซึ่งเป็นช่องเดียวกับที่ `jwt:` เคยตก
+      if (source !== "config") {
+        expect(prefix, `${source} ไม่มีคำนำหน้า จะถูกกลืนเป็น static-bearer โดยไม่มีอะไรฟ้อง`)
+          .toBeTruthy();
+      }
+
+      const client = prefix ? `${prefix}ทีมสมมติ` : STATIC_BEARER_CLIENT;
+      const mechanism = mechanismOfClient(client);
+
+      expect(MECHANISMS, `${source} ให้กลไกที่ไม่อยู่ในรายการ`).toContain(mechanism);
+      expect(mechanism, `${source} ตกลงไปที่ค่าที่เหลือแทนที่จะถูกจดจำ`).not.toBe("oauth");
+
+      expect(seen.has(mechanism), `${source} ใช้กลไกซ้ำกับชนิดอื่น แยกจากกันไม่ได้`).toBe(false);
+      seen.add(mechanism);
+    }
+  });
+
+  it("รหัสทึบที่ไม่มีคำนำหน้า ยังเป็น oauth ตามเดิม", () => {
+    expect(mechanismOfClient("Hdg-mXzVScgTE0n9")).toBe("oauth");
   });
 });

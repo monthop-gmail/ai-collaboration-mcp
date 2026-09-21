@@ -114,18 +114,71 @@ export function resolveAuthor(
     };
   }
 
-  if (!staticIdentity) return { client: "static-bearer", name: "Static bearer" };
+  if (!staticIdentity) return { client: STATIC_BEARER_CLIENT, name: "Static bearer" };
 
-  const client =
-    staticIdentity.source === "jwt"
-      ? `jwt:${staticIdentity.name}`
-      : staticIdentity.source === "header"
-        ? `static-header:${staticIdentity.name}`
-        : staticIdentity.source === "token"
-          ? `static-token:${staticIdentity.name}`
-          : "static-bearer";
+  const prefix = CLIENT_PREFIX[staticIdentity.source];
+  const client = prefix ? `${prefix}${staticIdentity.name}` : STATIC_BEARER_CLIENT;
 
   return { client, name: staticIdentity.name };
+}
+
+/**
+ * รหัส client ของเส้นทางที่ไม่ผูกชื่อ
+ *
+ * ค่านี้กลืนสองกรณีที่ต่างกันจริงโดยตั้งใจ — โทเคนกลางที่ตั้ง `STATIC_CLIENT_NAME` ไว้
+ * (`source: "config"`) กับโทเคนกลางที่ไม่ตั้งอะไรเลย · ทั้งคู่ไม่มีอะไรผูกกับรหัส
+ * จึงแยกจากกันไม่ได้จากสิ่งที่บันทึก และผู้อ่านผลต้องรู้ข้อนี้
+ */
+export const STATIC_BEARER_CLIENT = "static-bearer";
+
+/**
+ * คำนำหน้ารหัส client ต่อชนิดของตัวตน
+ *
+ * **ตารางนี้ถูกใช้สร้างรหัสข้างบน และใช้อ่านรหัสกลับใน `mechanismOfClient()` ข้างล่าง**
+ * จงใจให้เป็นก้อนเดียว เพราะถ้าฝั่งสร้างกับฝั่งอ่านเป็นคนละรายการ วันที่มีคนเพิ่ม
+ * ชนิดใหม่ ฝั่งอ่านจะไม่รู้จักมันแล้วเดาเป็นชนิดอื่นแทน **โดยไม่มีอะไรฟ้อง**
+ *
+ * ซึ่งเกิดมาแล้วจริง — `get_participants` รุ่นแรกรายงาน `static-bearer` กับ `jwt:`
+ * ว่าเป็น `oauth` ทั้งคู่ เพราะรู้จักแค่สองคำนำหน้าแล้ว fallback ที่เหลือเป็น oauth
+ * เห็นตอนรันกับโต๊ะจริงครั้งแรก: `Claude Code` ขึ้นเป็น oauth ทั้งที่เข้าทาง static bearer
+ */
+export const CLIENT_PREFIX: Record<StaticIdentity["source"], string | undefined> = {
+  jwt: "jwt:",
+  header: "static-header:",
+  token: "static-token:",
+  config: undefined,
+};
+
+/** ชนิดของทางเข้าที่อ่านย้อนได้จากรหัส client ที่บันทึกไว้ */
+export const MECHANISMS = [
+  "oauth",
+  "gateway-jwt",
+  "static-header",
+  "static-token",
+  "static-bearer",
+] as const;
+
+export type Mechanism = (typeof MECHANISMS)[number];
+
+const PREFIX_TO_MECHANISM: ReadonlyArray<readonly [string, Mechanism]> = [
+  [CLIENT_PREFIX.jwt!, "gateway-jwt"],
+  [CLIENT_PREFIX.header!, "static-header"],
+  [CLIENT_PREFIX.token!, "static-token"],
+];
+
+/**
+ * ทางเข้าที่รหัส client ใบนี้มาจาก
+ *
+ * `oauth` เป็นค่าที่เหลือ ไม่ใช่ค่าที่ตรวจเจอ — รหัสของ OAuth เป็นสตริงทึบที่ไม่มี
+ * เครื่องหมายอะไรให้จับ จึงยืนยันได้แค่ว่า *ไม่ใช่* สี่อย่างข้างบน · ข้อนี้อยู่ใน
+ * `limitations` ของ `get_participants` ด้วย เพราะผู้อ่านต้องแยกออกจากการตรวจเจอจริง
+ */
+export function mechanismOfClient(client: string): Mechanism {
+  if (client === STATIC_BEARER_CLIENT) return "static-bearer";
+  for (const [prefix, mechanism] of PREFIX_TO_MECHANISM) {
+    if (client.startsWith(prefix)) return mechanism;
+  }
+  return "oauth";
 }
 
 /**

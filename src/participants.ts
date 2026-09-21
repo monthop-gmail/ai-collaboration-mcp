@@ -24,10 +24,11 @@
  * **ไม่มี trust · ไม่มี availability · ไม่มี personhood · ไม่มีคะแนน** ตามที่ freeze ไว้ใน
  * `dis-c6095786` seq 7 ข้อ 4 · คืนกลไกกับจำนวน แล้วให้ผู้อ่านสรุปเอง
  */
-/** กลไกที่ชื่อนี้เข้ามา — อ่านจาก `author_client` ตรง ๆ ไม่ได้ตีความเพิ่ม */
-export const MECHANISMS = ["oauth", "static-header", "static-token"] as const;
-export type Mechanism = (typeof MECHANISMS)[number];
 
+// ตารางกลไกอยู่ที่ `identity.ts` ที่เดียวกับโค้ดที่สร้างรหัส client — ถ้าถือสำเนา
+// ไว้ที่นี่ วันที่มีคนเพิ่มชนิดใหม่ ฝั่งนี้จะเดาผิดโดยไม่มีอะไรฟ้อง ซึ่งเกิดมาแล้ว
+import { mechanismOfClient, type Mechanism } from "./identity";
+/** กลไกที่ชื่อนี้เข้ามา — อ่านจาก `author_client` ตรง ๆ ไม่ได้ตีความเพิ่ม */
 export interface ObservedClient {
   /** ค่าที่ server บันทึกไว้จริง ไม่ใช่ของที่ผู้เรียกส่งมาเอง */
   client: string;
@@ -74,13 +75,9 @@ const LIMITATIONS = [
   "ชื่อเป็นป้ายสำหรับส่งงาน ไม่ใช่ตัวตน — ชื่อเดียวมาจากหลายกุญแจได้ และกุญแจเดียวทำงานหลายบทบาทได้",
   "clients นับจากการกระทำที่บันทึกรหัสไว้เท่านั้น — การแก้ใบและการเปิดกระทู้ไม่ได้เก็บรหัส จึงนับใน acted แต่ไม่โผล่ใน clients",
   "ไม่มีชื่อในรายการ แปลว่าไม่เคยทั้งพูดและลงมือใน workspace นี้ ไม่ได้แปลว่าไม่มีอยู่",
+  "mechanism oauth เป็นค่าที่เหลือ ไม่ใช่ค่าที่ตรวจเจอ — ยืนยันได้แค่ว่าไม่ใช่สี่ทางที่มีเครื่องหมายให้จับ",
+  "static-bearer กลืนสองกรณีที่ต่างกันจริง คือโทเคนกลางที่ตั้งชื่อไว้ กับที่ไม่ตั้ง แยกจากสิ่งที่บันทึกไม่ได้",
 ] as const;
-
-function mechanismOf(client: string): Mechanism {
-  if (client.startsWith("static-token:")) return "static-token";
-  if (client.startsWith("static-header:")) return "static-header";
-  return "oauth";
-}
 
 interface Row {
   name: string | null;
@@ -169,7 +166,7 @@ class Bucket {
     if (!client || !at) return;
     const seen = this.clients.get(client);
     if (!seen || at > seen.last_seen) {
-      this.clients.set(client, { client, mechanism: mechanismOf(client), last_seen: at });
+      this.clients.set(client, { client, mechanism: mechanismOfClient(client), last_seen: at });
     }
   }
 }
