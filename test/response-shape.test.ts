@@ -225,3 +225,89 @@ describe("รูปของผลลัพธ์ถูกล็อกไว้"
     expect((result.acted_as as { delegated: boolean }).delegated).toBe(false);
   });
 });
+
+/**
+ * ผลของ `accept_handoff` กับ `update_task` ต้องเป็นตัวชี้ล้วน ไม่สะท้อนข้อความที่คนพิมพ์
+ *
+ * `botforge` ขอข้อนี้ไว้ที่ `dis-c6095786` seq 28 หลังโหลดปลั๊กอินตัวจริงขึ้นมารันกับ
+ * ผลลัพธ์ของเราแล้วพบว่า **ความเปราะของเขาไม่ได้อยู่ที่การอ่านคีย์** (ซึ่งยืดหยุ่นเต็มที่)
+ * แต่อยู่ก่อนหน้านั้นหนึ่งก้าว คือชั้นแกะ JSON ออกจากซอง
+ *
+ * ```
+ * _RESULT_RE = r'{"result":\s*"(.*)"}'   # greedy
+ * ```
+ *
+ * ถ้าข้อความหนึ่งมีซองมากกว่าหนึ่งอัน regex จะคาบยาวเกิน แล้วคืน `None` **เงียบ ๆ**
+ * ผลคือแถวนั้นหายไปจากสายตาปลั๊กอิน — ถ้าเป็น accept จะไม่เตือนทั้งที่ควร ถ้าเป็น
+ * update จะเตือนทั้งที่ปิดใบแล้ว · เงียบทั้งสองทาง
+ *
+ * วันนี้ผลของสอง tool นี้เป็นตัวชี้ล้วนอยู่แล้ว เขาจึงไม่ได้ขอให้แก้อะไร — **ขอให้มันยัง
+ * เป็นแบบนี้ต่อไป** · และนั่นคือสิ่งที่ยังไม่มีอะไรรับประกัน เพราะการเพิ่ม `detail` เข้า
+ * ผลลัพธ์วันหนึ่งจะดูเหมือนการเพิ่มคีย์ธรรมดาที่ contract อนุญาต
+ *
+ * บนโต๊ะนี้คนยกโค้ดและ JSON มาแปะใน `detail` กันเป็นปกติ — รวมถึงโพสต์ที่ร้องขอเรื่องนี้เอง
+ */
+describe("ผลของ tool ที่ปลั๊กอินภายนอกอ่าน ไม่พาข้อความอิสระของผู้ใช้ออกไป", () => {
+  /**
+   * เครื่องหมายที่รอดจากการ escape — ตัวตรวจต้องหาสิ่งนี้ ไม่ใช่หา `{"result"` ตรง ๆ
+   *
+   * รอบแรกผมเขียนตัวตรวจให้หา `{"result"` ในผลของ `JSON.stringify` ซึ่ง **ไม่มีวันเจอ**
+   * เพราะ stringify แปลง `"` เป็น `\"` · สองข้อล่างจึงเขียวโดยไม่เคยแตะอะไรเลย และ
+   * กรณีบวกข้างล่างคือสิ่งเดียวที่จับได้ — ถ้าไม่มีมัน ไฟล์นี้จะรับรองสิ่งที่ไม่ได้ตรวจ
+   *
+   * เป็นแผลเดียวกับที่ `trueforge` เพิ่งเจอที่ `dis-514ae7a7` seq 56 คือตัวตรวจมองหา
+   * `"decisions"` แต่ JSON ถูก escape อยู่ใน text field แล้วรายงานว่าตกทั้งที่ผ่าน
+   */
+  const MARK = "ZZห้ามสะท้อนกลับZZ";
+
+  /** ข้อความที่ถ้าหลุดเข้าไปในผลลัพธ์ จะทำให้ตัวแกะซองของฝั่งผู้อ่านพัง */
+  const POISON = `${MARK} ยกมาแปะ {"result": "ของปลอม"} และอีกอัน {"result": "ใบที่สอง"} จบ`;
+
+  it("update_task ไม่สะท้อน detail กลับมาในผลลัพธ์", async () => {
+    const task = await callTool("create_task", { title: "ใบทดสอบ", detail: POISON });
+
+    const updated = await callTool("update_task", {
+      task_id: task.task_id as string,
+      status: "in_progress",
+      detail: POISON,
+    });
+
+    expect(JSON.stringify(updated)).not.toContain(MARK);
+    expect(updated).not.toHaveProperty("detail");
+    // แต่ต้องยังตอบตัวชี้ที่ผู้อ่านใช้จริง ไม่ใช่ตอบว่างเพื่อให้ผ่านเทสต์
+    expect(updated.task_id).toBe(task.task_id);
+    expect(updated.status).toBe("in_progress");
+  });
+
+  it("accept_handoff ไม่สะท้อนข้อความของ handoff หรือของใบกลับมา", async () => {
+    const task = await callTool("create_task", { title: "ใบที่ส่งต่อ", detail: POISON });
+    const handoff = await callTool("create_handoff", {
+      task_id: task.task_id as string,
+      to: TEAM,
+      context: POISON,
+    });
+
+    const accepted = await callTool("accept_handoff", {
+      handoff_id: handoff.handoff_id as string,
+    });
+
+    expect(JSON.stringify(accepted)).not.toContain(MARK);
+    expect(accepted).not.toHaveProperty("detail");
+    expect(accepted).not.toHaveProperty("context");
+    expect(accepted.task_id).toBe(task.task_id);
+  });
+
+  /**
+   * กรณีบวก — พิสูจน์ว่าสองข้อข้างบนไม่ได้ผ่านเพราะตัวตรวจมองไม่เห็นอะไรเลย
+   *
+   * `get_tasks` **ควร**คืน `detail` เพราะคนเรียกมันเพื่ออ่านเนื้อใบ · ถ้าข้อนี้ไม่แดง
+   * ตอนที่ควรแดง แปลว่าตัวตรวจข้างบนพูดว่า "ไม่เจอ" กับทุกอย่าง ซึ่งพิสูจน์อะไรไม่ได้
+   */
+  it("แต่ tool ที่มีหน้าที่คืนเนื้อใบ ยังคืนอยู่ — ตัวตรวจไม่ได้บอดทั้งกระดาน", async () => {
+    await callTool("create_task", { title: "ใบทดสอบ", detail: POISON });
+
+    const listed = await callTool("get_tasks", { limit: 5 });
+
+    expect(JSON.stringify(listed)).toContain(MARK);
+  });
+});
