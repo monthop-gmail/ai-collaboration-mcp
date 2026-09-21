@@ -1142,6 +1142,15 @@ export interface UnseenTarget {
   evidence: string;
 }
 
+export interface AcceptedNotFinished {
+  task_id: string;
+  title: string;
+  status: TaskStatus;
+  /** ใครกดรับ — ผู้ที่รับปาก ไม่ใช่ผู้ที่ใบจ่าหน้าถึง ซึ่งอาจเป็นคนละคน */
+  accepted_by: string | null;
+  accepted_at: string | null;
+}
+
 export interface WorkspaceHealth {
   /** handoff ที่ยังไม่มีใครรับ ของทั้งโต๊ะ แยกตามอายุ */
   handoffs: { waiting: number; stale: number; inactive: number };
@@ -1161,6 +1170,23 @@ export interface WorkspaceHealth {
   open_tasks: { unstarted: number; parked: { tasks: WaitingTask[]; total: number } };
   /** ปลายทางของ handoff ที่ค้าง ซึ่งชื่อนั้นไม่เคยลงมืออะไรในโต๊ะนี้เลย */
   unseen_targets: UnseenTarget[];
+  /**
+   * ใบที่มีคนกดรับแล้ว แต่ยังไม่มีใครประกาศผล — ไม่ใช่ `done` และไม่ใช่ `blocked`
+   *
+   * มีเพราะ **runtime จบ turn ไม่เท่ากับงานเสร็จ** · โมเดลเขียนว่า *"กำลัง update task
+   * เป็น done ให้เลยครับ"* แล้ว turn จบตรงนั้น ใบยังค้างและไม่มีอะไรผิดพลาดให้เห็นเลย
+   * (`dis-6c9dd6e3` seq 44) — ฝั่ง runtime แก้ด้วย guard ไปแล้ว แต่ฝั่ง server ยังไม่มี
+   * อะไรบอกว่าคำพูดกับสถานะไม่ตรงกัน
+   *
+   * **ไม่มีเส้นแบ่งเวลา** เพราะเกณฑ์ว่านานแค่ไหนถึงผิดปกติขึ้นกับบริบทที่ระบบไม่มี —
+   * รอบทดลองจบใน 57 วินาที ส่วนงานของทีมคนอาจใช้เวลาเป็นสัปดาห์โดยไม่มีอะไรผิด
+   * คืนเวลาที่รับไปให้ผู้อ่านตัดสินเอง เหมือนที่ `unseen_targets` คืน `oldest`
+   *
+   * **ใบที่ค้างอยู่ในนี้ไม่ใช่ความผิดพลาดที่ต้องตามเก็บ** — `ws-bench-08` ตั้งใจให้ค้าง
+   * เพื่อเป็นหลักฐาน และ ChatGPT ระบุไว้ที่ seq 69 ว่าสถานะนี้เป็นของที่ถือเป็นทางการ
+   * สำหรับการเฝ้าระวัง
+   */
+  accepted_not_finished: { tasks: AcceptedNotFinished[]; total: number };
 }
 
 /**
@@ -1229,7 +1255,7 @@ export async function readWorkspaceHealth(
   const cutoff = staleCutoff();
   const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
 
-  const [ages, delegatedHandoffs, delegatedTasks, openTasks, targets, ...actorRows] =
+  const [ages, delegatedHandoffs, delegatedTasks, openTasks, stalled, targets, ...actorRows] =
     await db.batch([
     db
       .prepare(
@@ -1270,6 +1296,31 @@ export async function readWorkspaceHealth(
         `SELECT id, title, status, ${IS_PARKED} AS parked
            FROM tasks WHERE workspace_id = ?1 AND status = 'open'
           ORDER BY created_at`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        // ใบที่มีคนกดรับแล้วแต่ยังไม่มีใครประกาศผล
+        //
+        // ใช้ subquery หา handoff ใบล่าสุดที่ถูกรับ ไม่ใช้คอลัมน์เปล่าคู่กับ `MAX()`
+        // เพราะการรับประกันของ SQLite เป็นโมฆะเมื่อมี min/max มากกว่าหนึ่งตัว และ
+        // การเขียนแบบนั้นจะได้ชื่อจากแถวไหนก็ได้โดยไม่มีอะไรฟ้อง
+        //
+        // ตัด `done` กับ `blocked` ออกทั้งคู่ เพราะทั้งสองคือการที่มีคนประกาศผลแล้ว —
+        // สิ่งที่ตามหาคือใบที่มีคนรับปากแล้วเงียบไป ไม่ใช่ใบที่ยังไม่จบ
+        `SELECT t.id AS task_id, t.title, t.status,
+                (SELECT h.accepted_by FROM handoffs h
+                  WHERE h.task_id = t.id AND h.status = 'accepted'
+                  ORDER BY h.accepted_at DESC, h.rowid DESC LIMIT 1) AS accepted_by,
+                (SELECT h.accepted_at FROM handoffs h
+                  WHERE h.task_id = t.id AND h.status = 'accepted'
+                  ORDER BY h.accepted_at DESC, h.rowid DESC LIMIT 1) AS accepted_at
+           FROM tasks t
+          WHERE t.workspace_id = ?1
+            AND t.status NOT IN ('done', 'blocked')
+            AND EXISTS (SELECT 1 FROM handoffs h
+                         WHERE h.task_id = t.id AND h.status = 'accepted')
+          ORDER BY accepted_at`,
       )
       .bind(workspaceId),
     db
@@ -1317,6 +1368,10 @@ export async function readWorkspaceHealth(
     open_tasks: {
       unstarted: open.length - parked.length,
       parked: { tasks: parked.slice(0, WAITING_PREVIEW), total: parked.length },
+    },
+    accepted_not_finished: {
+      tasks: (stalled.results as AcceptedNotFinished[]).slice(0, WAITING_PREVIEW),
+      total: stalled.results.length,
     },
     unseen_targets: (
       targets.results as Array<{ name: string; pending_handoffs: number; oldest: string }>

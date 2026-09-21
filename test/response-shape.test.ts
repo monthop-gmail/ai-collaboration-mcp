@@ -202,6 +202,7 @@ describe("รูปของผลลัพธ์ถูกล็อกไว้"
   it("health คืนสี่ช่องนี้", async () => {
     const open = (await context()).open_items as { health: object };
     expect(Object.keys(open.health).sort()).toEqual([
+      "accepted_not_finished",
       "delegated",
       "handoffs",
       "open_tasks",

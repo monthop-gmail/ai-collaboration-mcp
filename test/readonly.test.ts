@@ -539,6 +539,7 @@ describe("ภาพรวมบนเส้นอ่าน ได้ของช
     const result = await context({ limit: 1 });
 
     expect(Object.keys(result.open_items.health).sort()).toEqual([
+      "accepted_not_finished",
       "delegated",
       "handoffs",
       "open_tasks",

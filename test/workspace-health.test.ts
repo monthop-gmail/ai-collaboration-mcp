@@ -78,6 +78,16 @@ interface Health {
     oldest: string;
     evidence: string;
   }>;
+  accepted_not_finished: {
+    tasks: Array<{
+      task_id: string;
+      title: string;
+      status: string;
+      accepted_by: string | null;
+      accepted_at: string | null;
+    }>;
+    total: number;
+  };
 }
 
 const TEAM_A = "owner/team-a";
@@ -371,6 +381,118 @@ describe("โต๊ะที่ไม่มีอะไรค้าง", () => {
       delegated: { handoffs: [], tasks: [], total: 0 },
       open_tasks: { unstarted: 0, parked: { tasks: [], total: 0 } },
       unseen_targets: [],
+      accepted_not_finished: { tasks: [], total: 0 },
     });
+  });
+});
+
+/**
+ * ใบที่มีคนกดรับแล้ว แต่ยังไม่มีใครประกาศผล
+ *
+ * มีเพราะ **runtime จบ turn ไม่เท่ากับงานเสร็จ** — `dis-6c9dd6e3` seq 44 โมเดลเขียนว่า
+ * *"กำลัง update task เป็น done ให้เลยครับ"* แล้ว turn จบตรงนั้น `finish_reason=stop`
+ * `tool_calls=0` · ใบยังค้างและไม่มีอะไรผิดพลาดให้เห็นเลย
+ *
+ * ฝั่ง runtime แก้ด้วย guard ไปแล้ว **แต่ฝั่ง server ยังไม่มีอะไรบอกว่าคำพูดกับสถานะ
+ * ไม่ตรงกัน** — ช่องนี้คือสิ่งนั้น
+ *
+ * ของที่ต้องคุมคือ **มันต้องแยกใบที่เงียบไป ออกจากใบที่มีคนประกาศผลแล้ว** ไม่ว่าผลนั้น
+ * จะเป็น `done` หรือ `blocked` เพราะทั้งสองคือการที่มีคนตอบ
+ */
+describe("ใบที่รับแล้วแต่ยังไม่มีใครประกาศผล", () => {
+  interface Stalled {
+    task_id: string;
+    title: string;
+    status: string;
+    accepted_by: string | null;
+    accepted_at: string | null;
+  }
+
+  async function stalled(): Promise<{ tasks: Stalled[]; total: number }> {
+    return (await health()).accepted_not_finished;
+  }
+
+  /** ส่งงานแล้วให้ปลายทางกดรับ — สภาพเดียวกับตอนที่ agent รับใบแล้วเงียบไป */
+  async function accepted(title: string, by = TEAM_B): Promise<string> {
+    const task = await callTool(TEAM_A, "create_task", { title });
+    const handoff = await callTool(TEAM_A, "create_handoff", {
+      task_id: task.task_id as string,
+      to: by,
+      context: "ส่งให้รับไปทำ",
+    });
+    await callTool(by, "accept_handoff", { handoff_id: handoff.handoff_id as string });
+    return task.task_id as string;
+  }
+
+  it("รับแล้วเงียบ — ขึ้นพร้อมชื่อผู้รับและเวลาที่รับ", async () => {
+    const taskId = await accepted("งานที่รับแล้วไม่มีใครปิด");
+
+    const { tasks, total } = await stalled();
+
+    expect(total).toBe(1);
+    expect(tasks[0]).toMatchObject({
+      task_id: taskId,
+      status: "in_progress",
+      accepted_by: TEAM_B,
+    });
+    expect(typeof tasks[0].accepted_at).toBe("string");
+  });
+
+  it("ปิดเป็น done แล้ว — ไม่ขึ้น", async () => {
+    const taskId = await accepted("งานที่รับแล้วปิดเรียบร้อย");
+    await callTool(TEAM_B, "update_task", { task_id: taskId, status: "done" });
+
+    expect(await stalled()).toEqual({ tasks: [], total: 0 });
+  });
+
+  /**
+   * `blocked` คือการที่มีคนประกาศผลแล้วเหมือนกัน ต่างจาก `done` แค่เนื้อของผล —
+   * ถ้าไม่ตัดออก ช่องนี้จะฟ้องทุกใบที่รายงานว่าติด ซึ่งเป็นการลงโทษคนที่ทำถูก
+   */
+  it("ประกาศว่า blocked แล้ว — ไม่ขึ้น เพราะมีคนตอบแล้ว", async () => {
+    const taskId = await accepted("งานที่รับแล้วรายงานว่าติด");
+    await callTool(TEAM_B, "update_task", {
+      task_id: taskId,
+      status: "blocked",
+      detail: "รอของจากทีมอื่น",
+    });
+
+    expect(await stalled()).toEqual({ tasks: [], total: 0 });
+  });
+
+  /**
+   * ต้องมีการ **กดรับ** จริง ไม่ใช่แค่ใบที่ค้างอยู่ — สิ่งที่ตามหาคือคนที่รับปากไว้แล้วเงียบ
+   * ไม่ใช่งานที่ยังไม่มีใครแตะ ซึ่งเป็นคนละอาการและมีช่องของตัวเองอยู่แล้ว
+   */
+  it("ใบที่ไม่เคยมีใครกดรับ ไม่ขึ้น แม้จะ in_progress", async () => {
+    const task = await callTool(TEAM_A, "create_task", { title: "งานที่เริ่มเองไม่ผ่าน handoff" });
+    await callTool(TEAM_A, "update_task", {
+      task_id: task.task_id as string,
+      status: "in_progress",
+    });
+
+    expect(await stalled()).toEqual({ tasks: [], total: 0 });
+  });
+
+  /**
+   * ชื่อที่คืนต้องเป็น **ผู้ที่กดรับจริง** ไม่ใช่ผู้ที่ใบจ่าหน้าถึง — สองอย่างนี้ต่างกันจริง
+   * 55 ครั้งในโต๊ะนี้ และช่องนี้มีไว้ตอบว่าใครรับปาก ไม่ใช่ใครถูกจ่าหน้า
+   */
+  it("คืนชื่อผู้ที่กดรับจริง ไม่ใช่ผู้ที่ใบจ่าหน้าถึง", async () => {
+    const task = await callTool(TEAM_A, "create_task", { title: "งานที่มีคนรับแทน" });
+    const handoff = await callTool(TEAM_A, "create_handoff", {
+      task_id: task.task_id as string,
+      to: TEAM_A,
+      context: "จ่าหน้าถึง team-a",
+    });
+    await callTool(TEAM_B, "accept_handoff", { handoff_id: handoff.handoff_id as string });
+
+    const { tasks } = await stalled();
+
+    expect(tasks[0].accepted_by).toBe(TEAM_B);
+  });
+
+  it("โต๊ะที่ไม่มีใบแบบนี้ คืนรายการว่าง ไม่ใช่หายไปจากผลลัพธ์", async () => {
+    expect(await stalled()).toEqual({ tasks: [], total: 0 });
   });
 });
