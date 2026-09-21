@@ -11,6 +11,15 @@ import { RequestError, postMessage, type Author } from "./db";
 export const DECISION_STATUSES = ["proposed", "approved", "rejected"] as const;
 export type DecisionStatus = (typeof DECISION_STATUSES)[number];
 
+/**
+ * ใบนี้ผูกเฉพาะเรื่องของมัน หรือเป็นกติกาของทั้งโต๊ะ
+ *
+ * `project` เป็นค่าเริ่มต้นและเป็นของส่วนใหญ่ — อนุมัติเรื่องเดียวของโปรเจกต์เดียว
+ * `workspace` คือกติกาที่ทุกทีมต้องทำตาม ซึ่งต้องหาเจอโดยไม่ต้องไล่อ่านทุกใบ
+ */
+export const DECISION_SCOPES = ["project", "workspace"] as const;
+export type DecisionScope = (typeof DECISION_SCOPES)[number];
+
 export const TASK_STATUSES = ["open", "in_progress", "blocked", "done"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
@@ -30,6 +39,9 @@ export interface Decision {
   decided_reason: string | null;
   decided_at: string | null;
   superseded_by: string | null;
+  scope: DecisionScope;
+  scope_set_by: string | null;
+  scope_set_at: string | null;
 }
 
 /**
@@ -250,6 +262,10 @@ export async function recordDecision(
     decided_reason: null,
     decided_at: null,
     superseded_by: null,
+    // ใบเกิดใหม่ผูกเฉพาะเรื่องของมันเสมอ ไม่มีทางที่ผู้เสนอจะปักใบของตัวเองเป็นกติกา
+    scope: "project",
+    scope_set_by: null,
+    scope_set_at: null,
   };
 
   await db
@@ -902,6 +918,150 @@ export async function resolveDecision(
   };
 }
 
+/* ── กติกาของโต๊ะ ─────────────────────────────────────────────────────── */
+
+export interface StandingRule {
+  id: string;
+  title: string;
+  /** ระดับหลักฐานของการปิดใบ ไม่ใช่ของการปัก — สองอย่างนี้เกิดคนละเวลา */
+  decided_by_kind: DecidedByKind | null;
+  decided_at: string | null;
+  /**
+   * ใครปักใบนี้เป็นกติกา และเมื่อไหร่ — `null` ทั้งคู่แปลว่าถูกปักก่อนที่จะมีช่องนี้
+   *
+   * ใช้ชื่อเดียวกับคอลัมน์ในตารางโดยตั้งใจ แม้ในบริบทนี้คำว่า `pinned_by` จะอ่านลื่นกว่า
+   * เพราะ `get_decisions` คืนทั้งแถวด้วย `SELECT *` ถ้าตั้งชื่อต่างกันสองที่ คนอ่านจะ
+   * ต้องรู้เองว่าสองชื่อนี้คือค่าเดียวกัน
+   */
+  scope_set_by: string | null;
+  scope_set_at: string | null;
+}
+
+/**
+ * ปักใบที่อนุมัติแล้วให้เป็นกติกาของทั้งโต๊ะ หรือถอดออก
+ *
+ * **ต้องส่ง APPROVAL_SECRET ที่ถูกต้องมาด้วยเสมอ ไม่มีทางอื่น** ซึ่งเข้มกว่าการปิดใบ
+ * โดยตั้งใจ เพราะการปิดใบผูกเฉพาะเรื่องของใบนั้น ส่วนการปักเป็นกติกา**ผูกคนที่ไม่ได้
+ * อยู่ในห้องตอนตัดสิน** รวมถึงทีมที่ยังไม่เข้ามาในโต๊ะ
+ *
+ * ผลที่ได้จากการบังคับข้อนี้คือคุณสมบัติที่ผู้อ่านใช้ได้โดยไม่ต้องไล่ดูทีละแถว —
+ * **ทุกใบในรายการกติกา มีคนที่ถือรหัสของเซิร์ฟเวอร์เป็นคนปัก** ถ้ายอมให้ปักแบบ
+ * relayed ได้ด้วย คำแถลงนั้นจะอ่อนลงเหลือ "มี AI สักตัวบอกว่ามีคนสั่ง"
+ *
+ * แยกจาก `resolve_decision` เพราะใบที่เป็นกติกาอยู่แล้ววันนี้ **ถูกปิดไปหมดแล้ว**
+ * ถ้าตั้งได้เฉพาะตอนปิด ใบที่ทำให้ต้องมีฟีเจอร์นี้ตั้งแต่แรกจะปักไม่ได้ตลอดกาล
+ */
+export async function setDecisionScope(
+  db: D1Database,
+  decisionId: string,
+  scope: DecisionScope,
+  author: Author,
+  approval: { code: string; secret?: string },
+): Promise<Decision> {
+  if (!approval.secret) {
+    throw new RequestError(
+      "เซิร์ฟเวอร์ยังไม่ได้ตั้ง APPROVAL_SECRET จึงตรวจรหัสไม่ได้ — " +
+        "การปักกติกาต้องมีคนยืนยัน ไม่มีทางปักโดยไม่ยืนยัน",
+    );
+  }
+  if (approval.code !== approval.secret) {
+    throw new RequestError("approval_code ไม่ถูกต้อง — ไม่ได้เปลี่ยน scope ให้");
+  }
+
+  const existing = await db
+    .prepare("SELECT * FROM decisions WHERE id = ?1")
+    .bind(decisionId)
+    .first<Decision>();
+  if (!existing) throw new RequestError(`ไม่พบ decision '${decisionId}'`);
+
+  // ใบที่ยังไม่ถูกตัดสิน หรือถูกปฏิเสธไปแล้ว เป็นกติกาไม่ได้ — ข้อเสนอที่ยังไม่ผ่าน
+  // ไม่ได้ผูกใคร และของที่ตกไปแล้วยิ่งไม่ผูก
+  if (scope === "workspace" && existing.status !== "approved") {
+    throw new RequestError(
+      `ใบนี้สถานะ '${existing.status}' ยังไม่ใช่ 'approved' จึงเป็นกติกาของโต๊ะไม่ได้`,
+    );
+  }
+
+  // บันทึกทั้งตอนปักและตอนถอด ถ้าบันทึกเฉพาะตอนปัก แถวที่ถูกถอดจะค้างชื่อคนปักไว้
+  // ทั้งที่มันไม่ใช่กติกาแล้ว ซึ่งชี้ผิดคนแย่กว่าไม่ชี้เลย
+  const setAt = now();
+  await db
+    .prepare("UPDATE decisions SET scope = ?1, scope_set_by = ?2, scope_set_at = ?3 WHERE id = ?4")
+    .bind(scope, author.name, setAt, decisionId)
+    .run();
+
+  return { ...existing, scope, scope_set_by: author.name, scope_set_at: setAt };
+}
+
+export interface StandingRuleDetail extends StandingRule {
+  detail: string;
+  discussion_id: string | null;
+  decided_by: string | null;
+}
+
+/**
+ * เงื่อนไขว่าอะไรคือ "กติกาที่ยังใช้อยู่" — เขียนที่เดียว ใช้ทั้ง MCP และหน้าอ่าน
+ *
+ * เรียงด้วย `rowid` ต่อท้ายเพราะเวลาใน Workers ไม่ขยับระหว่างโค้ดที่รันติดกัน สองใบ
+ * ที่ปิดในจังหวะเดียวกันจะได้ `decided_at` เท่ากัน แล้วลำดับจะไม่แน่นอน — เป็นแผล
+ * เดียวกับที่ `HAS_NEWER_HANDOFF` เจอมาก่อน
+ */
+const STANDING_RULE_WHERE = `workspace_id = ?1 AND scope = 'workspace'
+          AND status = 'approved' AND superseded_by IS NULL`;
+
+const STANDING_RULE_ORDER = "decided_at, rowid";
+
+/**
+ * กติกาที่ยังใช้อยู่ของ workspace — คืนแค่ตัวชี้กับหัวเรื่อง ไม่เอาเนื้อ
+ *
+ * ค่านี้ไปอยู่ใน `get_workspace_context` ซึ่งผู้เรียกทุกตัวเรียกเป็นอันดับแรก จึงต้อง
+ * ถูกที่สุด — ห้าใบเป็นไม่กี่ร้อย byte ส่วนคนที่อยากอ่านเต็มเรียก `get_decisions`
+ * เป็นใบ ๆ ได้ · วัดมาแล้วว่า `get_decisions` ของ 16 ใบที่อนุมัติแล้วคืนมา 54KB
+ * ซึ่งแปลว่าคำแนะนำที่ว่า "ไปอ่านเอาเอง" จ่ายไม่ไหวอยู่แล้ววันนี้
+ *
+ * ตัดใบที่ถูกแทนแล้วออก ด้วยเกณฑ์เดียวกับ `plans_current`
+ */
+export async function readStandingRules(
+  db: D1Database,
+  workspaceId: string,
+): Promise<StandingRule[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, title, decided_by_kind, decided_at, scope_set_by, scope_set_at
+         FROM decisions WHERE ${STANDING_RULE_WHERE} ORDER BY ${STANDING_RULE_ORDER}`,
+    )
+    .bind(workspaceId)
+    .all<StandingRule>();
+
+  return results;
+}
+
+/**
+ * กติกาชุดเดียวกัน แต่เอาเนื้อมาด้วย — สำหรับหน้าอ่านของคน
+ *
+ * แยกจาก `readStandingRules` เพราะข้อจำกัดของผู้อ่านคนละอย่าง · ฝั่ง MCP ต้องประหยัด
+ * ที่สุดเพราะค่านี้ไปอยู่ใน `get_workspace_context` ซึ่งทุกตัวเรียกเป็นอันดับแรก ส่วน
+ * **คนที่เปิดหน้าเว็บมาอ่านกติกา ต้องการตัวกติกา ไม่ใช่ตัวชี้ไปหามัน**
+ *
+ * เงื่อนไขว่าอะไรคือกติกาที่ยังใช้อยู่ ใช้ค่าคงที่ตัวเดียวกันทั้งสองที่ ถ้าแยกกันเขียน
+ * วันหนึ่งสองหน้าจะตอบไม่ตรงกัน แล้วไม่มีใครรู้ว่าอันไหนถูก
+ */
+export async function readStandingRuleDetails(
+  db: D1Database,
+  workspaceId: string,
+): Promise<StandingRuleDetail[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, title, detail, discussion_id, decided_by, decided_by_kind, decided_at,
+              scope_set_by, scope_set_at
+         FROM decisions WHERE ${STANDING_RULE_WHERE} ORDER BY ${STANDING_RULE_ORDER}`,
+    )
+    .bind(workspaceId)
+    .all<StandingRuleDetail>();
+
+  return results;
+}
+
 /* ── ภาพรวมของที่ยังค้าง ─────────────────────────────────────────────── */
 
 export interface WaitingHandoff {
@@ -940,10 +1100,234 @@ export interface OpenItems {
     in_progress: { tasks: WaitingTask[]; total: number };
     total: number;
   };
+  /**
+   * สภาพของโต๊ะทั้งโต๊ะ — คนละคำถามกับ `waiting_for_you` ซึ่งเป็นเรื่องของผู้เรียก
+   *
+   * แยกคีย์กันเพราะสองอย่างนี้ตอบคนละคำถาม และถ้าปนกัน ของที่ไม่ใช่ของเราจะอ่าน
+   * เหมือนเป็นงานที่เราต้องทำ
+   */
+  health: WorkspaceHealth;
 }
 
 /** จำกัดรายการที่ยกมาแสดง ที่เหลือดูได้จาก get_tasks / get_handoffs */
 const WAITING_PREVIEW = 10;
+
+/* ── สภาพของโต๊ะทั้งโต๊ะ ไม่ใช่เฉพาะของผู้เรียก ───────────────────────── */
+
+export interface DelegatedHandoff {
+  handoff_id: string;
+  task_id: string;
+  addressed_to: string;
+  acted_by: string;
+}
+
+export interface DelegatedTask {
+  task_id: string;
+  title: string;
+  addressed_to: string;
+  acted_by: string;
+}
+
+export interface UnseenTarget {
+  name: string;
+  pending_handoffs: number;
+  oldest: string;
+  /**
+   * ถ้อยคำที่ยกมาใช้ได้ตรง ๆ โดยไม่ต้องตีความต่อ
+   *
+   * เขียนเป็นข้อเท็จจริงที่สังเกตได้ ไม่ใช่ข้อสรุปว่าชื่อนี้ไม่มีตัวตน เพราะชื่ออย่าง
+   * `Cursor` ในโต๊ะนี้เป็นป้ายเดียวที่ทำงานหลายบทบาท การบอกว่า "ไม่รู้จัก" จะหลอก
+   * คนอ่าน — Cursor ทักข้อนี้ไว้เองที่ dis-c6095786 seq 9 ข้อ 4
+   */
+  evidence: string;
+}
+
+export interface WorkspaceHealth {
+  /** handoff ที่ยังไม่มีใครรับ ของทั้งโต๊ะ แยกตามอายุ */
+  handoffs: { waiting: number; stale: number; inactive: number };
+  /**
+   * ผู้ลงมือจริงไม่ตรงกับผู้ที่บันทึกระบุ — รายงาน ไม่ใช่ห้าม
+   *
+   * คู่กับฟิลด์ `acted_as` ที่ `accept_handoff` กับ `update_task` คืนตอนลงมือ
+   * ต่างกันตรงที่อันนั้นบอกคนที่กำลังทำ ส่วนอันนี้บอกคนที่มาอ่านทีหลังว่ามีกี่ใบ
+   */
+  delegated: { handoffs: DelegatedHandoff[]; tasks: DelegatedTask[]; total: number };
+  /**
+   * งานเปิดที่จอดไว้โดยตั้งใจ แยกจากงานเปิดที่ยังไม่มีใครเริ่ม
+   *
+   * สองอย่างนี้ต้องการการกระทำคนละแบบ แต่รวมกันอยู่ในยอด `open` ยอดเดียวมาตลอด
+   * ผลคือยอดที่ควรจะฟ้องกลับฟ้องผิดทุกวันจนไม่มีใครดู
+   */
+  open_tasks: { unstarted: number; parked: { tasks: WaitingTask[]; total: number } };
+  /** ปลายทางของ handoff ที่ค้าง ซึ่งชื่อนั้นไม่เคยลงมืออะไรในโต๊ะนี้เลย */
+  unseen_targets: UnseenTarget[];
+}
+
+/**
+ * คำที่ต้องขึ้นต้น title หรือ detail เพื่อให้ถือว่าจอดไว้โดยตั้งใจ
+ *
+ * เป็น convention ไม่ใช่สคีมา เพราะสถานะจริงต้องรอ contract ถัดไป และ Cursor เสนอ
+ * ไว้ที่ dis-c6095786 seq 9 ข้อ 3 ว่าอย่ารอ แล้วปล่อยให้ยอดฟ้องผิดทุกวันระหว่างนั้น
+ *
+ * ตรวจแบบขึ้นต้นเท่านั้น ไม่ใช่หาคำนี้ที่ไหนก็ได้ในข้อความ เพราะใบที่เขียนว่า
+ * "ห้ามจอดใบนี้" จะถูกนับเป็นจอดทันที ซึ่งแย่กว่าไม่มีตัวนับ — ราคาของเส้นที่คมคือ
+ * ใบที่จอดจริงแต่ไม่ได้ใช้คำนี้จะไม่ถูกนับ และนั่นเป็นสิ่งที่แก้ได้ด้วยการแก้ใบ
+ * ส่วนการเดาผิดแก้ไม่ได้ด้วยอะไรเลย
+ */
+const PARKED_MARK = "PARKED";
+
+const IS_PARKED = `(upper(substr(ltrim(detail), 1, ${PARKED_MARK.length})) = '${PARKED_MARK}'
+      OR upper(substr(ltrim(title),  1, ${PARKED_MARK.length})) = '${PARKED_MARK}')`;
+
+/**
+ * ชื่อที่ **เคยลงมืออะไรสักอย่าง** ในโต๊ะนี้
+ *
+ * เกณฑ์คือการกระทำที่ทิ้งร่องรอยไว้ ไม่ใช่การถูกเอ่ยถึง — `assigned_to` กับ `to_whom`
+ * เป็นค่าที่คนอื่นพิมพ์ ใช้เป็นหลักฐานว่ามีตัวตนไม่ได้ ไม่งั้นทุกชื่อที่ถูกส่งงานไป
+ * จะยืนยันตัวเองด้วยการถูกส่งงาน
+ */
+/**
+ * ชื่อที่ **เคยลงมืออะไรสักอย่าง** ในโต๊ะนี้ — แยกเป็นคิวรีสั้น ๆ แล้วรวมใน TypeScript
+ *
+ * เกณฑ์คือการกระทำที่ทิ้งร่องรอยไว้ ไม่ใช่การถูกเอ่ยถึง — `assigned_to` กับ `to_whom`
+ * เป็นค่าที่คนอื่นพิมพ์ ใช้เป็นหลักฐานว่ามีตัวตนไม่ได้ ไม่งั้นทุกชื่อที่ถูกส่งงานไป
+ * จะยืนยันตัวเองด้วยการถูกส่งงาน
+ *
+ * ที่ไม่รวมเป็น UNION เดียวเพราะ SQLite ของ D1 จำกัดจำนวนท่อนใน compound SELECT
+ * ไว้ต่ำกว่าที่คาด — รวมหกท่อนแล้วได้ `too many terms in compound SELECT` ซึ่งเป็น
+ * ข้อผิดพลาดตอนรัน ไม่ใช่ตอน build จึงจับได้ก็ต่อเมื่อมีเทสต์ที่ยิงของจริง
+ */
+const ACTOR_QUERIES = [
+  `SELECT m.author_name AS name
+     FROM messages m JOIN discussions d ON d.id = m.discussion_id
+    WHERE d.workspace_id = ?1
+    UNION SELECT created_by FROM discussions WHERE workspace_id = ?1`,
+  `SELECT created_by AS name FROM tasks WHERE workspace_id = ?1
+    UNION SELECT updated_by FROM tasks WHERE workspace_id = ?1 AND updated_by IS NOT NULL`,
+  `SELECT h.accepted_by AS name
+     FROM handoffs h JOIN tasks t ON t.id = h.task_id
+    WHERE t.workspace_id = ?1 AND h.accepted_by IS NOT NULL
+    UNION SELECT h.from_name
+     FROM handoffs h JOIN tasks t ON t.id = h.task_id
+    WHERE t.workspace_id = ?1`,
+];
+
+/**
+ * สภาพของโต๊ะที่อ่านได้จากการเรียกครั้งเดียว
+ *
+ * ตามที่ Cursor วางขั้นต่ำไว้ที่ dis-c6095786 seq 9 ข้อ 2 — สี่อย่างนี้เป็นของที่
+ * วันนี้ต้องไล่อ่านหลาย tool ถึงจะเห็น หรือไม่เห็นเลย
+ *
+ * **ทุกช่องเป็นข้อเท็จจริง ไม่ใช่คำตัดสิน** ไม่มีคำว่าผิดปกติ ไม่มีคะแนน ไม่มีคำแนะนำ
+ * เพราะเกณฑ์ว่าอะไรควรเป็นห่วงขึ้นกับบริบทที่ระบบไม่มี — ใบที่ค้างสามวันอาจปกติ
+ * สำหรับงานที่รอของ และผิดปกติมากสำหรับงานที่มีคนรอ
+ */
+export async function readWorkspaceHealth(
+  db: D1Database,
+  workspaceId: string,
+): Promise<WorkspaceHealth> {
+  const cutoff = staleCutoff();
+  const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
+
+  const [ages, delegatedHandoffs, delegatedTasks, openTasks, targets, ...actorRows] =
+    await db.batch([
+    db
+      .prepare(
+        `SELECT CASE WHEN h.created_at < ?2 THEN 'stale' ELSE 'waiting' END AS state,
+                COUNT(*) AS n
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND NOT ${inactive}
+          GROUP BY state
+         UNION ALL
+         SELECT 'inactive', COUNT(*)
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND ${inactive}`,
+      )
+      .bind(workspaceId, cutoff),
+    db
+      .prepare(
+        `SELECT h.id AS handoff_id, h.task_id,
+                h.to_whom AS addressed_to, h.accepted_by AS acted_by
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'accepted'
+            AND h.accepted_by IS NOT NULL
+            AND lower(h.accepted_by) != lower(h.to_whom)
+          ORDER BY h.accepted_at DESC`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT id AS task_id, title, assigned_to AS addressed_to, updated_by AS acted_by
+           FROM tasks
+          WHERE workspace_id = ?1
+            AND assigned_to IS NOT NULL AND updated_by IS NOT NULL
+            AND lower(updated_by) != lower(assigned_to)
+          ORDER BY updated_at DESC`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT id, title, status, ${IS_PARKED} AS parked
+           FROM tasks WHERE workspace_id = ?1 AND status = 'open'
+          ORDER BY created_at`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT h.to_whom AS name, COUNT(*) AS pending_handoffs, MIN(h.created_at) AS oldest
+           FROM handoffs h JOIN tasks t ON t.id = h.task_id
+          WHERE t.workspace_id = ?1 AND h.status = 'pending' AND NOT ${inactive}
+          GROUP BY lower(h.to_whom)
+          ORDER BY oldest`,
+      )
+      .bind(workspaceId),
+    ...ACTOR_QUERIES.map((sql) => db.prepare(sql).bind(workspaceId)),
+  ]);
+
+  const byState = new Map(
+    (ages.results as Array<{ state: string; n: number }>).map((r) => [r.state, r.n]),
+  );
+
+  const open = openTasks.results as Array<WaitingTask & { parked: number }>;
+  const parked = open
+    .filter((t) => t.parked === 1)
+    .map(({ parked: _mark, ...task }) => task);
+
+  const handoffs = delegatedHandoffs.results as DelegatedHandoff[];
+  const tasks = delegatedTasks.results as DelegatedTask[];
+
+  const acted = new Set(
+    actorRows
+      .flatMap((r) => r.results as Array<{ name: string | null }>)
+      .map((r) => r.name?.toLowerCase())
+      .filter((name): name is string => name !== undefined),
+  );
+
+  return {
+    handoffs: {
+      waiting: byState.get("waiting") ?? 0,
+      stale: byState.get("stale") ?? 0,
+      inactive: byState.get("inactive") ?? 0,
+    },
+    delegated: {
+      handoffs: handoffs.slice(0, WAITING_PREVIEW),
+      tasks: tasks.slice(0, WAITING_PREVIEW),
+      total: handoffs.length + tasks.length,
+    },
+    open_tasks: {
+      unstarted: open.length - parked.length,
+      parked: { tasks: parked.slice(0, WAITING_PREVIEW), total: parked.length },
+    },
+    unseen_targets: (
+      targets.results as Array<{ name: string; pending_handoffs: number; oldest: string }>
+    )
+      .filter((row) => !acted.has(row.name.toLowerCase()))
+      .map((row) => ({
+        ...row,
+        evidence: "ชื่อนี้ไม่เคยโพสต์ ไม่เคยรับ handoff และไม่เคยแก้ใบใน workspace นี้",
+      })),
+  };
+}
 
 /**
  * สรุปของที่ยังค้างใน workspace รวมของที่รอผู้เรียกอยู่โดยเฉพาะ
@@ -974,7 +1358,8 @@ export async function readOpenItems(
   const cutoff = staleCutoff();
   const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
 
-  const [counts, taskCounts, plan, myHandoffs, myTasks] = await db.batch([
+  const [[counts, taskCounts, plan, myHandoffs, myTasks], health] = await Promise.all([
+    db.batch([
     db
       .prepare(
         `SELECT 'decisions' AS k, COUNT(*) AS n
@@ -1027,6 +1412,8 @@ export async function readOpenItems(
           ORDER BY created_at`,
       )
       .bind(workspaceId, myName),
+    ]),
+    readWorkspaceHealth(db, workspaceId),
   ]);
 
   const byKey = new Map(
@@ -1069,5 +1456,6 @@ export async function readOpenItems(
       },
       total: unacceptedTotal + inProgress.length,
     },
+    health,
   };
 }

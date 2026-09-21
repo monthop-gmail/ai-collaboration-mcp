@@ -11,8 +11,8 @@ import {
   readWorkspaceContext,
   type MessageKind,
 } from "./db";
-import { CONTRACT_VERSION, Limit, Workspace, registerTool, run } from "./tool-kit";
-import { readOpenItems } from "./db-work";
+import { CONTRACT_VERSION, Limit, QuietForDays, Workspace, registerTool, run } from "./tool-kit";
+import { readOpenItems, readStandingRules } from "./db-work";
 import { registerWorkTools } from "./tools-work";
 
 const Kind = z
@@ -164,20 +164,29 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         "discussions, who has taken part, what is still open, and — under " +
         "'waiting_for_you' — the work addressed to you by name, split into " +
         "'unaccepted' (handoffs to accept and tasks nobody has started) and " +
-        "'in_progress' (what you already took on). Call this first when you join: " +
-        "it is cheaper than reading threads and it is the only place work aimed at " +
-        "you shows up on its own.",
+        "'in_progress' (what you already took on). Under 'health' you get the same " +
+        "kind of facts about the whole workspace rather than about you: pending " +
+        "handoffs by age, records where the party who acted is not the party the " +
+        "record names, open tasks parked on purpose kept apart from open tasks " +
+        "nobody has started, and handoff targets that have never acted here. Those " +
+        "are observations, not verdicts — none of them means something is wrong. " +
+        "'standing_rules' lists the decisions that bind every team here, by id and " +
+        "title only — read them with get_decisions before deciding how to work. " +
+        "Call this first when you join: it is cheaper than reading threads and it " +
+        "is the only place work aimed at you shows up on its own.",
       inputSchema: z.object({
         workspace: Workspace,
         limit: Limit,
+        quiet_for_days: QuietForDays,
       }),
     },
-    async ({ workspace, limit }) =>
+    async ({ workspace, limit, quiet_for_days }) =>
       run(async () => {
         const me = author();
-        const [context, openItems] = await Promise.all([
-          readWorkspaceContext(env.DB, workspace, limit),
+        const [context, openItems, standingRules] = await Promise.all([
+          readWorkspaceContext(env.DB, workspace, limit, quiet_for_days),
           readOpenItems(env.DB, workspace, me.name),
+          readStandingRules(env.DB, workspace),
         ]);
 
         return {
@@ -186,11 +195,15 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
           contract: CONTRACT_VERSION,
           workspace: context.workspace,
           you_are: me.name,
+          // อยู่ก่อน open_items โดยตั้งใจ — กติกาต้องอ่านก่อนตัดสินใจว่าจะทำงานอย่างไร
+          // ไม่ใช่เจอทีหลังตอนที่ทำผิดไปแล้ว
+          standing_rules: standingRules,
           participants: context.participants,
           open_items: openItems,
           discussions: context.discussions,
           has_more: context.has_more,
           total_discussions: context.total_discussions,
+          quiet_discussions: context.quiet_discussions,
         };
       }),
   );

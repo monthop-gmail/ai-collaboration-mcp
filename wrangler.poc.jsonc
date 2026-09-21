@@ -1,0 +1,42 @@
+// Config ของ deployment ทดสอบเท่านั้น — ชื่อ Worker, ฐาน D1 และ KV ของ OAuth
+// แยกจากของจริงทั้งหมด เพื่อไม่ให้ grant/token/ข้อมูลของสองฝั่งปนกัน
+// สร้างตาม dis-bc779b20 seq 23 · ลบทิ้งเมื่อจบรอบตาม docs/poc/collab-test-deployment.md
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-collaboration-mcp-poc",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-21",
+  "observability": {
+    "enabled": true
+  },
+  "workers_dev": true,
+  "preview_urls": false,
+  // ค่าของ gateway test runtime — ไม่ใช่ความลับสักตัว จึงอยู่ใน config ที่อ่านได้
+  // แทนที่จะเป็น secret · issuer/audience/connector id เป็นสตริงสำหรับเทียบ ส่วน
+  // JWKS เป็นกุญแจสาธารณะ การเก็บไว้ตรงนี้ทำให้ deployment บอกตัวเองได้ว่าเชื่อใคร
+  //
+  // ต้นทาง `monthop-gmail/internal-mcp-gateway` ที่ `test-runtime/README.md`
+  // `.invalid` เป็น TLD ที่ RFC 2606 สงวนไว้และแก้เป็น IP ไม่ได้ ถ้ามีคนเผลอเอา
+  // ชุดนี้ไปใช้กับของจริง จะต่อไม่ติดทันที ไม่ใช่ต่อติดแล้วเชื่อโทเคนผิดชุด
+  "vars": {
+    "CLIENT_NAME_ALIASES": "Google=Gemini",
+    "GATEWAY_JWT_ISSUER": "https://internal-mcp-gateway-test.monthop-gmail.workers.dev/mcp",
+    "GATEWAY_JWT_AUDIENCE": "mcp://internal-mcp-gateway-test.monthop-gmail.workers.dev/connector/collab-readonly-test",
+    "GATEWAY_CONNECTOR_ID": "collab-readonly-test",
+    "GATEWAY_JWKS_SOURCE": "gateway",
+    "GATEWAY_JWKS": "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"j1sWojVDVkQqwZaFzd-9Bmp63n_yc6GJzIIraooP8Rcfq_kwfZ_VSAtBb6uaLtC_lhjpEvYPv1mXOz6mr8EImdsZ7RGdmdkogb11BZDQCqtJjPJ0w2sn27xgali12jegR1JpviTjM3sucIAEXxE_y-LrXi-xyLxS77EHvS2Ijyj-szIzQbusXOmhQXgROtvNNhJRmJVCFM6zsDPs_k4NHv8GAj9t66K84PGw8H7qU7jU1-AI43HwqVmlU-Ki1m6bpu_gIq7Xe9YHisup7-vyhU-Jgul-xgNIVGNbLDWsN1T79un8Kp4zD9pFKeFF1o5f_qbd1BUw8tb_FvQ5jHO5YQ\",\"e\":\"AQAB\",\"kid\":\"gw-2026-09-18-1\",\"alg\":\"RS256\",\"use\":\"sig\"}]}"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "9ad46a74ee5b4a1a88e8c230aa11d2d7"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-collab-poc",
+      "database_id": "d3ea7845-ee84-46a3-a8a5-0e83828abc2e"
+    }
+  ]
+}

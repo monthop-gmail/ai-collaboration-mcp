@@ -88,6 +88,26 @@ export const Limit = z
   .default(DEFAULT_LIMIT)
   .describe(`Maximum rows to return (1-${MAX_LIMIT}).`);
 
+/**
+ * เกณฑ์ความเงียบของกระทู้ — ไม่มีค่าเริ่มต้น เพราะ "เงียบ" ไม่เท่ากับ "จบแล้ว"
+ *
+ * การกรองต้องเป็นสิ่งที่ผู้เรียกขอ ไม่ใช่สิ่งที่ server ทำให้เงียบ ๆ ถ้า server กรอง
+ * เองโดย default ค่า `discussions` เดิมจะเปลี่ยนความหมายจาก "ทั้งหมด" เป็น
+ * "เฉพาะที่ยังเคลื่อนไหว" ซึ่งเป็นการเปลี่ยนความหมายของคีย์เดิม ไม่ใช่การเพิ่มคีย์
+ * และจะลาก contract 3 มาโดยไม่ตั้งใจ — ตามที่ตกลงกันไว้ที่ dis-c6095786 seq 7 ข้อ D
+ */
+export const QuietForDays = z
+  .number()
+  .int()
+  .min(1)
+  .max(3650)
+  .optional()
+  .describe(
+    "Optional. Hide discussions with no activity for this many days. " +
+      "Omit to get every discussion, which is the default and the unchanged behaviour. " +
+      "Whatever you pass, the result always reports how many were hidden.",
+  );
+
 export function formatResult(result: unknown) {
   const text =
     typeof result === "string" ? result : JSON.stringify(result, null, 2) ?? String(result);
@@ -163,6 +183,52 @@ export async function run(fn: () => Promise<unknown>) {
  * server ห้ามไม่ได้ว่า agent จะทำอะไร แต่คืนความจริงให้มันอ่านได้ เพื่อไม่ให้เล่าสิ่งที่
  * ไม่ได้เกิดขึ้น — หลักการเดียวกับการอ่าน record กลับมาหลังเขียน
  */
+/**
+ * ใครลงมือ เทียบกับใครที่บันทึกระบุ
+ *
+ * โต๊ะนี้มีเคสจริงแล้วสี่ครั้งที่ผู้ลงมือไม่ใช่ผู้ที่ใบจ่าหน้าถึง — ใบที่ส่งถึงทีมหนึ่ง
+ * แต่อีกทีมกดรับ ใบที่ส่งถึงทีมหนึ่งแต่อีกทีมส่งมอบของจริง และใบที่ส่งถึงคนแต่ทีมแก้
+ * สถานะให้ตามคำสั่ง ทุกครั้งไม่มีอะไรผิด แต่บันทึกอ่านแล้วเหมือนผู้ที่ถูกระบุเป็นคนทำ
+ *
+ * **ไม่ห้าม** เพราะการรับแทนและส่งมอบแทนเป็นเรื่องปกติที่ต้องทำได้ ถ้าห้าม งานที่
+ * เสร็จแล้วจะไม่มีใครปิดได้ และงานที่ไซต์จะไม่เดิน — รายงานอย่างเดียว
+ *
+ * **มีเสมอไม่ว่าจะตรงหรือไม่ตรง** ด้วยเหตุผลเดียวกับที่ `create_task` คืนฟิลด์
+ * `handoff` เป็น null เสมอ คือผู้อ่านต้องมองผ่านค่าที่บอกว่าไม่มี ไม่ใช่สรุปจาก
+ * การที่ไม่มีฟิลด์ · ฟิลด์ที่โผล่เฉพาะตอนผิดปกติ จะถูกมองข้ามตอนที่มันโผล่
+ */
+export function actedAs(
+  addressedTo: string | null | undefined,
+  actedBy: string | null | undefined,
+): {
+  addressed_to: string | null;
+  acted_by: string | null;
+  delegated: boolean;
+  note?: string;
+} {
+  const addressed =
+    typeof addressedTo === "string" && addressedTo.trim() !== "" ? addressedTo : null;
+  const actor = typeof actedBy === "string" && actedBy.trim() !== "" ? actedBy : null;
+
+  // ไม่มีผู้ถูกระบุ ก็ไม่มีอะไรให้เทียบ — ต่างจากกรณีที่มีแล้วตรงกัน และผู้อ่าน
+  // แยกสองกรณีนี้ออกได้จาก `addressed_to` ที่อยู่ในผลลัพธ์เดียวกัน
+  const delegated = addressed !== null && actor !== null && addressed !== actor;
+
+  return {
+    addressed_to: addressed,
+    acted_by: actor,
+    delegated,
+    ...(delegated
+      ? {
+          note:
+            `The record names '${addressed}' but '${actor}' did this. That is allowed — ` +
+            "work is often picked up or finished by someone the ticket did not name. " +
+            "It is reported so the record is not read as if the named party acted.",
+        }
+      : {}),
+  };
+}
+
 export function handoffReminder(assignedTo: string | null | undefined): string | undefined {
   if (typeof assignedTo !== "string" || assignedTo.trim() === "") return undefined;
 

@@ -6,9 +6,27 @@ import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
 import { handleView } from "./view";
 import { nameForToken, staticIdentityFor, type StaticIdentity } from "./identity";
+import { withReadOnlyGuard } from "./readonly";
+import {
+  createAdapter,
+  jwksSourceMismatch,
+  JWKS_SOURCES,
+  type Jwks,
+  type JwksSource,
+  type Principal,
+} from "./jwt";
 import type { Env } from "./env";
 
 const MCP_ROUTE = "/mcp";
+
+/**
+ * เส้นทางอ่านอย่างเดียว แยก path และแยกรหัสจากเส้นปกติ
+ *
+ * แยกทั้งสองอย่างเพราะถ้าแยกแค่ path รหัสใบเดียวก็ยังเดินได้ทั้งสองทาง ขอบเขต
+ * ความเชื่อถือจึงไม่มีอยู่จริง — การผูกนี้คือรหัส → เส้นทาง/ความสามารถ ไม่ใช่
+ * รหัส → ตัวตนของคน ซึ่งเป็นคนละเรื่องกับที่ยังพักไว้
+ */
+const MCP_READONLY_ROUTE = "/mcp-readonly";
 
 /**
  * factory ของ server ไม่ได้รับ env แต่ละ handler จึงปิดทับ env ที่สร้างมันมา
@@ -30,24 +48,26 @@ const handlers = new WeakMap<object, Map<string, StatelessMcpHandler>>();
  */
 const MAX_CACHED_HANDLERS = 32;
 
-function getHandler(env: Env, identity?: StaticIdentity): StatelessMcpHandler {
+function getHandler(env: Env, identity?: StaticIdentity, readOnly = false): StatelessMcpHandler {
   let byIdentity = handlers.get(env as object);
   if (!byIdentity) {
     byIdentity = new Map();
     handlers.set(env as object, byIdentity);
   }
 
-  const key = identity ? `${identity.source}:${identity.name}` : "";
+  // เส้นทางเป็นส่วนหนึ่งของ key ไม่งั้น handler ที่ถูก cache ไว้จากเส้นหนึ่งจะถูก
+  // หยิบไปใช้กับอีกเส้น แล้ว server ที่ปิด tool ไว้จะกลายเป็นเปิด
+  const key = `${readOnly ? "ro" : "rw"}|${identity ? `${identity.source}:${identity.name}` : ""}`;
   const cached = byIdentity.get(key);
   if (cached) return cached;
 
   const handler = createMcpHandler(
     () => {
       const server = new McpServer({ name: "ai-collaboration", version: "0.1.0" });
-      registerTools(server, env, identity);
+      registerTools(readOnly ? withReadOnlyGuard(server) : server, env, identity);
       return server;
     },
-    { route: MCP_ROUTE, ...originOptions(env) },
+    { route: readOnly ? MCP_READONLY_ROUTE : MCP_ROUTE, ...originOptions(env) },
   );
 
   if (byIdentity.size < MAX_CACHED_HANDLERS) byIdentity.set(key, handler);
@@ -72,8 +92,20 @@ function bearerToken(request: Request): string | undefined {
   return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
 }
 
-const mcpApiHandler = {
-  async fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
+async function serveMcp(
+  request: Request,
+  env: OAuthEnv,
+  ctx: ExecutionContext,
+  readOnly: boolean,
+  resolved?: StaticIdentity,
+): Promise<Response> {
+    // ตัวตนที่ตัดสินมาแล้วชนะทุกอย่าง และทำให้ไม่ต้องอ่าน `X-Client-Name` เลย
+    //
+    // ข้อนี้คือเงื่อนไข "spoofed X-Client-Name ไม่มีผลต่อ actor" ของใบงาน — ไม่ได้
+    // ทำด้วยการเทียบแล้วทิ้ง แต่ด้วยการไม่เคยอ่านมันบนเส้นทางนั้น การเทียบแล้วทิ้ง
+    // ยังเปิดช่องให้ใครสลับลำดับทีหลังแล้วมันกลับมามีผล
+    if (resolved) return getHandler(env, resolved, readOnly)(request, env, ctx);
+
     // คำนวณชื่อสำรองให้ทุกคำขอ ไม่ต้องแยกว่ามาทางไหน เพราะ `resolveAuthor` ให้
     // ตัวตนจาก OAuth ชนะเสมอเมื่อมี — ชื่อจาก header หรือจากโทเค็นจึงมีผลเฉพาะ
     // เส้น static bearer ส่วนคำขอที่มาทาง OAuth ถือโทเค็นคนละใบอยู่แล้วจึงไม่ตรง
@@ -88,7 +120,12 @@ const mcpApiHandler = {
       return json({ error: "invalid_client_name", detail: identity.reason }, 400);
     }
 
-    return getHandler(env, identity.identity)(request, env, ctx);
+  return getHandler(env, identity.identity, readOnly)(request, env, ctx);
+}
+
+const mcpApiHandler = {
+  fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
+    return serveMcp(request, env, ctx, false);
   },
 };
 
@@ -99,6 +136,225 @@ const mcpApiHandler = {
  * รหัสร่วมตรง ๆ ส่วน AI chat บนคลาวด์ทำไม่ได้ ต้องผ่าน OAuth ทั้งสองทางไปจบที่
  * handler เดียวกัน แต่ **ได้ตัวตนคนละแบบ** — ทางแรกไม่มี identity จาก DCR ให้อ่าน
  */
+/**
+ * บันทึกการใช้งานของเส้นอ่านอย่างเดียวเท่าที่ตอบคำถามว่า "หก tool พอไหม"
+ *
+ * เก็บ: ชื่อ tool ที่ถูกเรียก, ผลว่าผ่านหรือถูกปฏิเสธ, เวลาที่ใช้
+ * ไม่เก็บ: argument, เนื้อหา, โทเค็น, ตัวตนของผู้ใช้ และไม่แตะคำขอของเส้นปกติ
+ *
+ * อ่านชื่อ tool จาก body ซึ่งเป็น JSON-RPC อยู่แล้ว โดย clone request ก่อนเสมอ
+ * เพราะ body อ่านได้ครั้งเดียว ถ้าอ่านตรง ๆ handler จะได้ body เปล่า
+ */
+async function servePilotRoute(
+  request: Request,
+  env: OAuthEnv,
+  ctx: ExecutionContext,
+  auth: ReadOnlyAuth & { ok: true },
+): Promise<Response> {
+  let method: string | undefined;
+  let tool: string | undefined;
+  try {
+    const body = (await request.clone().json()) as {
+      method?: unknown;
+      params?: { name?: unknown };
+    };
+    method = typeof body.method === "string" ? body.method : undefined;
+    tool = typeof body.params?.name === "string" ? body.params.name : undefined;
+  } catch {
+    // คำขอที่ไม่ใช่ JSON ไม่ต้องบันทึกอะไร ปล่อยให้ handler จัดการต่อ
+  }
+
+  const response = await serveMcp(request, env, ctx, true, auth.identity);
+
+  if (method === "tools/call" || method === "tools/list") {
+    console.log(
+      JSON.stringify({
+        at: new Date().toISOString(),
+        event: "pilot_call",
+        // ชั้นของตัวเอง ไม่ใช่ของ gateway — ฝั่งนั้นลงของฝั่งนั้นเอง และค่าสองชั้น
+        // ที่ขัดกันถูกได้ทั้งคู่
+        layer: "upstream",
+        method,
+        tool,
+        status: response.status,
+        // ไม่มีช่องเวลาที่ใช้ เพราะวัดไม่ได้จริงบน Worker
+        //
+        // เคยมี `ms` อยู่ตรงนี้ คำนวณจาก Date.now() คร่อม serveMcp · เก็บ log จริง
+        // 36 บรรทัดจาก deployment แล้วได้ 0 ทั้ง 36 บรรทัด
+        //
+        // สาเหตุคือ Worker แช่นาฬิกาไว้และเลื่อนเฉพาะหลัง I/O เสร็จ ส่วนคำตอบของ
+        // เส้นนี้เป็นสตรีม จึงคืน Response ก่อนที่ body จะถูกเขียน เวลาที่อ่านได้
+        // สองครั้งจึงเป็นค่าเดียวกันเสมอ
+        //
+        // ช่องที่อ่านแล้วเหมือนเป็นการวัด แต่ไม่ได้วัดอะไรเลย แย่กว่าไม่มีช่องนั้น
+        // เพราะคนอ่านจะเชื่อว่ามีข้อมูลอยู่ — เป็นตระกูลเดียวกับ ops ที่ไม่มีใครตรวจ
+        // cid ที่ไม่มีใครตรวจ และ session ที่ไม่มีโค้ดไหนอ่าน ต่างกันแค่ข้อนี้เป็นของเรา
+        ...auditActor(auth),
+      }),
+    );
+  }
+  return response;
+}
+
+/**
+ * ตัวตนในบันทึก คำนวณจากของที่ฝั่งนี้ตรวจเอง ห้ามสืบทอดจาก gateway
+ *
+ * เหตุผลที่ห้ามสืบทอด — record ที่คัดลอกคำแถลงของชั้นอื่นมาแล้วอ้างเป็นของตัวเอง
+ * คือ audit ที่โกหกโดยไม่มีใครตั้งใจ (agent-platform, dis-514ae7a7 seq 16)
+ *
+ * `static_readonly_token` ลง `actor: null` เพราะรหัสบอกได้ว่าใบไหนเข้ามา บอกไม่ได้
+ * ว่าใครถือ — โทเคนส่งต่อกันได้ ส่วน `gateway_jwt_rs256` ลงชื่อได้เพราะ `sub` ผ่าน
+ * การตรวจลายเซ็นแล้วและผู้ถือแก้ไม่ได้
+ *
+ * **`cid` กับ `ops` อยู่ในบันทึก แต่ไม่ถือว่าเป็นเนื้อหาของโทเคน**
+ *
+ * สองค่านี้คือฐานที่ใช้ตัดสินว่าให้ผ่าน ไม่ใช่สิ่งที่ผู้เรียกส่งมาให้ประมวลผล
+ * การบันทึกว่าตัดสินบนฐานอะไร เป็นคนละเรื่องกับการบันทึกว่าเขาขออะไร — ถ้าไม่มี
+ * สองค่านี้ บันทึกบอกได้แค่ว่าใครเข้ามา บอกไม่ได้ว่าทำไมถึงให้เข้า
+ *
+ * ไม่ลง `aud` เพราะเป็นค่าที่ฝั่งนี้ตั้งเอง ถ้ามันไม่ตรง คำขอนั้นจะไม่มีอยู่ใน
+ * บันทึกตั้งแต่ต้น การลงซ้ำทุกบรรทัดจึงเพิ่มขนาดโดยไม่เพิ่มข้อเท็จจริง
+ *
+ * ไม่ลง `jti` เพราะยังไม่ได้เก็บไว้เทียบ การลงค่าที่ไม่มีใครใช้จะกลายเป็นฟิลด์ที่
+ * อยู่เฉย ๆ ซึ่งเป็นแผลที่ทั้งโต๊ะนี้ไล่แก้กันมาทั้งสัปดาห์
+ */
+export function auditActor(auth: ReadOnlyAuth & { ok: true }) {
+  const byJwt = auth.identity.source === "jwt";
+  return {
+    actor: byJwt ? `jwt:${auth.identity.name}` : null,
+    actor_resolved: byJwt,
+    authn_method: byJwt ? "gateway_jwt_rs256" : "static_readonly_token",
+    ...(auth.principal
+      ? {
+          cid: auth.principal.cid,
+          ops: auth.principal.ops,
+          // `cor` ลงได้เพราะมีคนใช้และบอกได้ว่าใช้ทำอะไร
+          //
+          // trueforge ขอไว้ที่ dis-514ae7a7 seq 36 ว่าถ้าเก็บไว้จะเทียบบรรทัดของ
+          // gateway กับของ upstream ได้ใบต่อใบ · รอบเก็บ log จริงเมื่อ 18 ก.ย.
+          // พิสูจน์ว่าจำเป็น เพราะจับคู่ได้เฉพาะด้วยเวลากับ method ซึ่งชนกันเองเมื่อ
+          // ยิงถี่ ๆ ในวินาทีเดียวกัน
+          //
+          // เกณฑ์ที่ใช้ตัดสินคือเกณฑ์เดียวกับที่ใช้ปฏิเสธ `jti` — ลงเมื่อมีคนอ่าน
+          // ไม่ใช่ลงเพราะมีค่าให้ลง ต่างกันตรงที่ `cor` มีผู้ใช้ที่ระบุตัวได้แล้ว
+          // ส่วน `jti` ยังไม่มี
+          ...(auth.principal.cor ? { cor: auth.principal.cor } : {}),
+        }
+      : {}),
+  };
+}
+
+export type ReadOnlyAuth =
+  | { ok: true; identity: StaticIdentity; principal?: Principal }
+  | { ok: false; reason: string; misconfigured?: undefined }
+  | { ok: false; reason?: undefined; misconfigured: string };
+
+/** โทเคนที่มีสามส่วนคั่นด้วยจุด ถือว่าผู้เรียกตั้งใจส่ง JWT ไม่ใช่รหัสร่วม */
+const looksLikeJwt = (token: string) => token.split(".").length === 3;
+
+/** ชื่อ env ทุกตัวของเส้น JWT — ตั้งครบหรือไม่ตั้งเลย ไม่มีตรงกลาง */
+const GATEWAY_VARS = [
+  "GATEWAY_JWT_ISSUER",
+  "GATEWAY_JWT_AUDIENCE",
+  "GATEWAY_JWKS",
+  "GATEWAY_CONNECTOR_ID",
+  "GATEWAY_JWKS_SOURCE",
+] as const;
+
+type GatewaySetup =
+  | { state: "off" }
+  | { state: "broken"; detail: string }
+  | { state: "ready"; adapter: ReturnType<typeof createAdapter> };
+
+/**
+ * upstream adapter ของเส้นนี้ — ตั้งครบทุกค่าหรือไม่ตั้งเลย
+ *
+ * ตั้งไม่ครบแล้วปิดเส้น JWT เงียบ ๆ เป็นความล้มเหลวที่มองไม่เห็น เพราะทุกคำขอจะตกไป
+ * ทาง static bearer แล้วดูเหมือนทำงานปกติ ทั้งที่ของที่ตั้งใจเปิดไว้ไม่ได้เปิด
+ * จึงปฏิเสธคำขอพร้อมบอกว่าขาดตัวไหน แบบเดียวกับที่ `/mcp` ทำเมื่อไม่มี `MCP_AUTH_TOKEN`
+ *
+ * และไม่มีค่าสำรองสำหรับตัวใดเลย โดยเฉพาะ audience — ถ้าตกไปที่ค่าของชุดทดสอบ
+ * deployment นั้นจะยอมรับโทเคนที่ใครก็ตามที่อ่านรีโปสาธารณะหยิบไปใช้ได้ทันที
+ *
+ * ไม่ cache instance เพราะ `createAdapter` ไม่มีของหนักและ Worker สร้าง env ใหม่
+ * ต่อคำขออยู่แล้ว — การ cache ข้าม env คือรูปเดียวกับ handler cache ที่เคยรั่วข้ามเส้น
+ */
+function gatewaySetup(env: Env): GatewaySetup {
+  const missing = GATEWAY_VARS.filter((name) => !env[name]);
+  if (missing.length === GATEWAY_VARS.length) return { state: "off" };
+  if (missing.length > 0) {
+    return { state: "broken", detail: `gateway JWT config is incomplete: missing ${missing.join(", ")}` };
+  }
+
+  const source = env.GATEWAY_JWKS_SOURCE as JwksSource;
+  if (!JWKS_SOURCES.includes(source)) {
+    return {
+      state: "broken",
+      detail: `GATEWAY_JWKS_SOURCE must be one of ${JWKS_SOURCES.join(", ")} — it declares what kind of key this is`,
+    };
+  }
+
+  let jwks: Jwks;
+  try {
+    jwks = JSON.parse(env.GATEWAY_JWKS!) as Jwks;
+  } catch {
+    return { state: "broken", detail: "GATEWAY_JWKS is not valid JSON" };
+  }
+  if (!jwks.keys?.length) return { state: "broken", detail: "GATEWAY_JWKS has no keys" };
+
+  // ประกาศไว้เฉย ๆ ไม่พอ ต้องตรงกับตัวกุญแจจริง — ค่าที่ประกาศผิดคือค่าที่อันตราย
+  // ที่สุด เพราะคนตั้งจะเชื่อว่า deployment นั้นปลอดภัยกว่าความจริง
+  const mismatch = jwksSourceMismatch(jwks, source);
+  if (mismatch) return { state: "broken", detail: mismatch };
+
+  return {
+    state: "ready",
+    // ไม่เก็บ `jti` เพราะ Worker มี isolate หลายตัว ต่างคนต่างเก็บแล้วตายเมื่อไรก็ได้
+    adapter: createAdapter({
+      issuer: env.GATEWAY_JWT_ISSUER!,
+      audience: env.GATEWAY_JWT_AUDIENCE!,
+      connectorId: env.GATEWAY_CONNECTOR_ID!,
+      getJwks: () => jwks,
+      trackJti: false,
+      jwksSource: source,
+    }),
+  };
+}
+
+/**
+ * รหัสของเส้นอ่านอย่างเดียว สองทางที่แยกกันเด็ดขาด
+ *
+ * ทาง JWT เป็นของที่เพิ่มเข้ามา ทาง static bearer เดิมยังอยู่เป็น compatibility path
+ * ใบในรายการนี้เข้าเส้นปกติไม่ได้ และใบของเส้นปกติก็เข้าเส้นนี้ไม่ได้
+ *
+ * โทเคนที่เป็นรูป JWT จะไม่ตกไปลองทาง static เมื่อตรวจไม่ผ่าน เพราะผู้เรียกตั้งใจ
+ * ส่ง JWT อยู่แล้ว การตกไปทางอื่นจะบังรหัสเหตุผลที่ฝั่ง gateway ต้องใช้ตรวจข้ามระบบ
+ */
+async function authorizeReadOnly(request: Request, env: Env): Promise<ReadOnlyAuth> {
+  const setup = gatewaySetup(env);
+  if (setup.state === "broken") return { ok: false, misconfigured: setup.detail };
+
+  const token = bearerToken(request);
+  if (!token) return { ok: false, reason: "missing_token" };
+
+  if (setup.state === "ready" && looksLikeJwt(token)) {
+    // operation ของรอบนี้เป็น `read` เสมอ เพราะเส้นนี้ไม่มี tool ที่เขียนได้เลย
+    const verified = await setup.adapter.verify(token, { operation: "read" });
+    return verified.ok
+      ? {
+          ok: true,
+          identity: { name: verified.principal.sub, source: "jwt" },
+          principal: verified.principal,
+        }
+      : { ok: false, reason: verified.reason };
+  }
+
+  const name = await nameForToken(token, env.MCP_READONLY_TOKENS);
+  return name
+    ? { ok: true, identity: { name, source: "token" } }
+    : { ok: false, reason: "unknown_token" };
+}
+
 async function hasStaticBearer(request: Request, env: Env): Promise<boolean> {
   const token = bearerToken(request);
   if (!token) return false;
@@ -150,6 +406,26 @@ export default {
       if (await hasStaticBearer(request, env)) {
         return mcpApiHandler.fetch(request, env, ctx);
       }
+    }
+
+    if (pathname === MCP_READONLY_ROUTE) {
+      // เส้นนี้ไม่ผูกกับ OAuth provider จึงต้องตอบ 401 เองเมื่อรหัสไม่ผ่าน แทนที่จะ
+      // ตกไปให้ provider ซึ่งจะพาไปหา flow ของเส้นปกติ
+      const auth = await authorizeReadOnly(request, env);
+      if (auth.ok) return servePilotRoute(request, env, ctx, auth);
+
+      // ตั้งค่าไม่ครบคือความผิดของฝั่ง server ไม่ใช่ของผู้เรียก จึงเป็น 500 ไม่ใช่ 401
+      // และต้องบอกว่าขาดอะไร ไม่งั้นคนตั้งจะเห็นแต่ 401 แล้วไปไล่หาที่โทเคน
+      if (auth.misconfigured) {
+        return json({ error: "server_misconfigured", detail: auth.misconfigured }, 500);
+      }
+
+      // คืนรหัสเหตุผลจากชุดปิด ไม่ใช่ข้อความอิสระ เพราะฝั่ง gateway ใช้ค่านี้ตรวจ
+      // ข้ามระบบและนับในตารางบันทึก — รหัสพวกนี้ไม่ใช่ความลับและบอกเฉพาะว่าโทเคน
+      // ตกด่านไหน ไม่ได้บอกว่าโทเคนที่ถูกควรเป็นอย่างไร
+      return json({ error: "unauthorized", reason: auth.reason }, 401, {
+        "WWW-Authenticate": 'Bearer realm="ai-collaboration read-only"',
+      });
     }
 
     // ที่เหลือเป็นของ provider — endpoint ของ OAuth, discovery metadata, หน้า
