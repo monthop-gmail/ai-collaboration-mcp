@@ -524,7 +524,7 @@ export async function handleView(request: Request, env: Env): Promise<Response |
         location: clean.pathname + clean.search,
         "set-cookie":
           `${COOKIE}=${encodeURIComponent(env.VIEW_TOKEN)}; Path=${VIEW_ROUTE}; ` +
-          "HttpOnly; Secure; SameSite=Strict; Max-Age=604800",
+          "HttpOnly; Secure; SameSite=Lax; Max-Age=604800",
       },
     });
   }
