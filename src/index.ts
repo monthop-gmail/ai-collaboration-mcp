@@ -239,6 +239,12 @@ export function auditActor(auth: ReadOnlyAuth & { ok: true }) {
           // ไม่ใช่ลงเพราะมีค่าให้ลง ต่างกันตรงที่ `cor` มีผู้ใช้ที่ระบุตัวได้แล้ว
           // ส่วน `jti` ยังไม่มี
           ...(auth.principal.cor ? { cor: auth.principal.cor } : {}),
+          // `kid` ของกุญแจที่ตรวจลายเซ็นผ่าน — ขอโดย trueforge ที่ dis-514ae7a7
+          // seq 74 เพื่อให้หลักฐานการหมุนกุญแจครบในฝั่งเดียว ไม่ต้องอนุมานข้ามฝั่ง
+          // จาก /healthz ว่าตอนนั้นดอกไหน active
+          //
+          // ค่าสาธารณะ ไม่ใช่ความลับ และปลอมไม่ได้เพราะมาจากกุญแจที่ตรวจผ่านจริง
+          ...(auth.principal.kid ? { kid: auth.principal.kid } : {}),
         }
       : {}),
   };

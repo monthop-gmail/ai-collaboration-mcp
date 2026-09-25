@@ -200,6 +200,59 @@ describe("audience ของ connector ตัวเดียว", () => {
   });
 });
 
+/**
+ * `kid` ที่บันทึกไว้ ต้องเป็นของกุญแจที่ **ตรวจลายเซ็นผ่านจริง** ไม่ใช่ที่ผู้เรียกอ้าง
+ *
+ * `trueforge` ขอฟิลด์นี้ที่ `dis-514ae7a7` seq 74 เพื่อให้หลักฐานการหมุนกุญแจครบใน
+ * ฝั่งเดียว · ค่าที่ลงแล้วเชื่อไม่ได้ แย่กว่าไม่ลง — เพราะรอบหมุนถัดไปจะมีคนเอาไป
+ * อ้างว่าตอนนั้นเป็นกุญแจดอกไหน
+ */
+describe("kid ในผลการตรวจ", () => {
+  it("โทเคนที่ผ่าน พา kid ของกุญแจที่ตรวจผ่านมาด้วย", async () => {
+    const valid = vectors.find((v) => v.id === "valid_read")!;
+
+    const got = await adapter(false).verify(valid.token, { operation: valid.operation });
+
+    expect(got.ok).toBe(true);
+    // ต้องตรงกับกุญแจที่อยู่ใน JWKS จริง ไม่ใช่สตริงที่เราเขียนคาดไว้เฉย ๆ
+    const kids = jwks.keys.map((k) => k.kid);
+    expect(kids).toContain(got.ok === true && got.principal.kid);
+  });
+
+  /**
+   * โทเคนที่อ้าง `kid` ซึ่งไม่มีใน JWKS ต้องตกที่ `unknown_kid` — **ก่อน** การตรวจ
+   * ลายเซ็นและก่อนตรวจ `exp`
+   *
+   * ลำดับนี้เป็นข้อที่ `trueforge` ยืนยันใน A8c ว่าขาดไม่ได้ · ถ้า `exp` มาก่อน
+   * โทเคนที่เซ็นด้วยกุญแจที่ถอนแล้วจะได้ `token_expired` ทุกใบ (อายุ ≤120 วิ)
+   * แล้วจะไม่มีวันรู้เลยว่าการถอนกุญแจทำงานหรือไม่ — **เวลากลบผลของการทดสอบ**
+   */
+  it("kid ที่ไม่มีใน JWKS ตกที่ unknown_kid ไม่ใช่ bad_signature หรือ token_expired", async () => {
+    const valid = vectors.find((v) => v.id === "valid_read")!;
+    const [head, body, sig] = valid.token.split(".");
+
+    // แปลง base64url เองในเทสต์ แทนการ export ฟังก์ชันภายในของ `src/jwt.ts` ออกมา
+    // เพื่อให้เทสต์เรียก — การเปิดของภายในเพื่อเทสต์ ทำให้ขอบของโมดูลเลื่อนโดย
+    // ไม่มีใครตัดสินใจ
+    const b64urlDecode = (v: string) =>
+      atob(v.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(v.length / 4) * 4, "="));
+    const b64urlEncode = (v: string) =>
+      btoa(v).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+    const header = JSON.parse(b64urlDecode(head!)) as Record<string, unknown>;
+
+    // เปลี่ยนเฉพาะ `kid` เป็นดอกที่ `trueforge` เพิ่งถอนจริงเมื่อ 25 ก.ย.
+    // **ลายเซ็นยังเป็นของเดิมและยังถูกต้องทุกประการ** — สิ่งที่เปลี่ยนคือเราไม่รับรอง
+    // กุญแจชื่อนั้นแล้ว ซึ่งเป็นคนละเหตุผลกับลายเซ็นผิด
+    const reheaded = `${b64urlEncode(JSON.stringify({ ...header, kid: "gw-2026-09-18-1" }))}.${body}.${sig}`;
+
+    const got = await adapter(false).verify(reheaded, { operation: valid.operation });
+
+    expect(got.ok).toBe(false);
+    expect(got.ok === false && got.reason).toBe("unknown_kid");
+  });
+});
+
 describe("cid เทียบกับ connector ที่ประกาศไว้ ไม่ใช่กับตัว audience เอง", () => {
   /**
    * ข้อที่ฝั่ง gateway ยืนยันใน seq 21 ว่าการแกะ connector จากท้าย audience อ่อนกว่า

@@ -24,7 +24,7 @@
     "GATEWAY_JWT_AUDIENCE": "mcp://internal-mcp-gateway-test.monthop-gmail.workers.dev/connector/collab-readonly-test",
     "GATEWAY_CONNECTOR_ID": "collab-readonly-test",
     "GATEWAY_JWKS_SOURCE": "gateway",
-    "GATEWAY_JWKS": "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"j1sWojVDVkQqwZaFzd-9Bmp63n_yc6GJzIIraooP8Rcfq_kwfZ_VSAtBb6uaLtC_lhjpEvYPv1mXOz6mr8EImdsZ7RGdmdkogb11BZDQCqtJjPJ0w2sn27xgali12jegR1JpviTjM3sucIAEXxE_y-LrXi-xyLxS77EHvS2Ijyj-szIzQbusXOmhQXgROtvNNhJRmJVCFM6zsDPs_k4NHv8GAj9t66K84PGw8H7qU7jU1-AI43HwqVmlU-Ki1m6bpu_gIq7Xe9YHisup7-vyhU-Jgul-xgNIVGNbLDWsN1T79un8Kp4zD9pFKeFF1o5f_qbd1BUw8tb_FvQ5jHO5YQ\",\"e\":\"AQAB\",\"kid\":\"gw-2026-09-18-1\",\"alg\":\"RS256\",\"use\":\"sig\"},{\"kty\":\"RSA\",\"n\":\"pFCuZ5eHm8cVBO8Wpw2dImjf_RjoovPfyHGSQ3aQZysL7L3U6x5hJ1ofCN2r30PborPvrR_YMy7jt6lxX7ENnQqNrbf4gEPT3Kb07be-OcRqPI7-uwEXLk3B27p0jnqQIMNhadPtZhYIVd5HvKKgq-j_u6oxUSQ-Gy1-OyfWpcYtMp7ndIy30ebdugpqyS5M0ZrC0kvdNqWZEfY_cWy5hx6UFITH8lQAdcFHzGSd1fBi4EvQ42Bzm1JM_bLUa9LnP6QuXo9O9646Bz7BlW0y0s2wbJNz3OjZ-TV_2_MYMpErt7wQJdiIwNKlTP5MaoMApp99oyOSiYkS4r7pfC9iqw\",\"e\":\"AQAB\",\"kid\":\"gw-2026-09-24-1\",\"alg\":\"RS256\",\"use\":\"sig\"}]}"
+    "GATEWAY_JWKS": "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"pFCuZ5eHm8cVBO8Wpw2dImjf_RjoovPfyHGSQ3aQZysL7L3U6x5hJ1ofCN2r30PborPvrR_YMy7jt6lxX7ENnQqNrbf4gEPT3Kb07be-OcRqPI7-uwEXLk3B27p0jnqQIMNhadPtZhYIVd5HvKKgq-j_u6oxUSQ-Gy1-OyfWpcYtMp7ndIy30ebdugpqyS5M0ZrC0kvdNqWZEfY_cWy5hx6UFITH8lQAdcFHzGSd1fBi4EvQ42Bzm1JM_bLUa9LnP6QuXo9O9646Bz7BlW0y0s2wbJNz3OjZ-TV_2_MYMpErt7wQJdiIwNKlTP5MaoMApp99oyOSiYkS4r7pfC9iqw\",\"e\":\"AQAB\",\"kid\":\"gw-2026-09-24-1\",\"alg\":\"RS256\",\"use\":\"sig\"}]}"
   },
   "kv_namespaces": [
     {
