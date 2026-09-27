@@ -269,6 +269,58 @@ describe("หน้าอ่านอย่างเดียว", () => {
     expect(html).toContain("ดูทั้งหมด");
   });
 
+  /**
+   * `obsolete` กับ `superseded` มี `status = 'pending'` ในฐานข้อมูลอยู่ดี เพราะไม่มีใคร
+   * ไปกด accept — ใบพวกนี้จึงลอดตัวกรองเดิมที่ดู `status` มาทั้งหมด
+   *
+   * เจ้าของงานทักเมื่อ 27 ก.ย. ว่าส่วนนี้เยอะจนไม่มีใครอ่าน · ตอนนั้นโต๊ะจริงมี handoff
+   * ที่ไม่ต้องรับแล้ว **20 ใบ ต่อใบที่ยังรอคนรับ 2 ใบ** — ของที่ต้องทำถูกกลบด้วยของที่จบแล้ว
+   */
+  it("ค่าเริ่มต้นซ่อน handoff ที่ไม่ต้องรับแล้ว แม้ status ในฐานยังเป็น pending", async () => {
+    const waiting = await createTask(env.DB, WS, "งานที่ยังค้าง", "", chatgpt);
+    const stillWaiting = await createHandoff(env.DB, waiting.id, "Gemini", "ช่วยต่อ", chatgpt);
+
+    // obsolete — ใบยังไม่มีใครรับ แต่งานปลายทางถูกปิดไปแล้ว
+    const closedTask = await createTask(env.DB, WS, "งานที่ปิดไปแล้ว", "", chatgpt);
+    const obsolete = await createHandoff(env.DB, closedTask.id, "Gemini", "ช่วยต่อ", chatgpt);
+    await updateTask(env.DB, closedTask.id, chatgpt, { status: "done" });
+
+    // superseded — ออกใบใหม่บนงานเดียวกัน ใบเก่าไม่ต้องรับแล้ว
+    const twice = await createTask(env.DB, WS, "งานที่ส่งต่อสองรอบ", "", chatgpt);
+    const older = await createHandoff(env.DB, twice.id, "Gemini", "รอบแรก", chatgpt);
+    const newer = await createHandoff(env.DB, twice.id, "Claude", "รอบสอง", chatgpt);
+
+    const res = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    // ที่ยังต้องรับ ต้องเห็น
+    expect(html).toContain(stillWaiting.handoff.id);
+    expect(html).toContain(newer.handoff.id);
+    // ที่ไม่ต้องรับแล้ว ต้องหาย
+    expect(html).not.toContain(obsolete.handoff.id);
+    expect(html).not.toContain(older.handoff.id);
+    // และต้องบอกเหตุที่ซ่อนให้ตรง — ไม่ใช่ "ปิดแล้ว" ซึ่งเป็นคนละเรื่องกับ "ไม่ต้องรับแล้ว"
+    expect(html).toContain("ซ่อน 2 รายการที่ไม่ต้องรับแล้ว");
+  });
+
+  it("ใส่ all=1 แล้ว handoff ที่ไม่ต้องรับแล้วกลับมาครบ", async () => {
+    const closedTask = await createTask(env.DB, WS, "งานที่ปิดไปแล้ว", "", chatgpt);
+    const obsolete = await createHandoff(env.DB, closedTask.id, "Gemini", "ช่วยต่อ", chatgpt);
+    await updateTask(env.DB, closedTask.id, chatgpt, { status: "done" });
+
+    const res = await handleView(
+      get("/view/items?all=1", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain(obsolete.handoff.id);
+    expect(html).toContain("obsolete");
+  });
+
   it("ใส่ all=1 แล้วเห็นครบ พร้อมทางกลับไปดูเฉพาะที่ค้าง", async () => {
     const dis = await createDiscussion(env.DB, WS, "กระทู้", chatgpt);
     const closed = await recordDecision(env.DB, WS, "ข้อสรุปที่ปิดแล้ว", "x", chatgpt, dis.id);
