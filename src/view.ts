@@ -15,6 +15,7 @@
 
 import { readMessages, readWorkspaceContext, getDiscussion } from "./db";
 import {
+  ACTIONABLE_HANDOFF_STATES,
   readDecisions,
   readHandoffs,
   readOpenItems,
@@ -342,10 +343,17 @@ function source(discussionId: string | null, workspace: string): string {
  * ซึ่งเป็นความล้มเหลวชนิดที่ repo นี้ตั้งขึ้นมาเพื่อกำจัด ทุกส่วนจึงบอกจำนวนที่ซ่อนพร้อม
  * ลิงก์ไปดูของครบเสมอ
  */
-function hiddenNote(count: number, showAll: boolean, workspace: string): string {
+function hiddenNote(
+  count: number,
+  showAll: boolean,
+  workspace: string,
+  // เหตุที่ซ่อนต่างกันตามชนิด — decision/งานถูกปิดแล้ว ส่วน handoff ที่ซ่อนคือใบที่
+  // **ไม่ต้องรับแล้ว** ซึ่งคนละเรื่องกับปิด · ใช้คำเดียวทุกส่วนคือการบอกเหตุผิดสองในสาม
+  reason = "ที่ปิดแล้ว",
+): string {
   if (showAll || count === 0) return "";
   const href = `${VIEW_ROUTE}/${ITEMS_PATH}?ws=${encodeURIComponent(workspace)}&all=1`;
-  return `<div class="muted">ซ่อน ${count} รายการที่ปิดแล้ว · <a href="${href}">ดูทั้งหมด</a></div>`;
+  return `<div class="muted">ซ่อน ${count} รายการ${reason} · <a href="${href}">ดูทั้งหมด</a></div>`;
 }
 
 async function renderItems(
@@ -367,9 +375,19 @@ async function renderItems(
       ? allDecisions.rows
       : allDecisions.rows.filter((d) => d.status === "proposed"),
   };
+  // กรองด้วย `state` ที่คำนวณสด ไม่ใช่ `status` ในฐาน
+  //
+  // `obsolete` กับ `superseded` มี `status = 'pending'` ในฐานข้อมูลอยู่ดี เพราะไม่มีใคร
+  // ไปกด accept — ใบพวกนี้จึงลอดตัวกรองเดิมมาทั้งหมด และสะสมจนกลบใบที่ยังต้องรับจริง
+  // (20 ใบ ต่อ 2 ใบที่ยังรอคนรับ ตอนที่เจ้าของงานทัก)
+  //
+  // ใช้ `ACTIONABLE_HANDOFF_STATES` ที่ประกาศไว้แล้ว แทนการเขียนรายการใหม่ที่นี่ —
+  // ถ้าวันหนึ่งมีสถานะใหม่ ที่นี่กับที่อื่นจะไม่เพี้ยนจากกัน
   const handoffs = {
     ...allHandoffs,
-    rows: showAll ? allHandoffs.rows : allHandoffs.rows.filter((h) => h.status === "pending"),
+    rows: showAll
+      ? allHandoffs.rows
+      : allHandoffs.rows.filter((h) => ACTIONABLE_HANDOFF_STATES.includes(h.state)),
   };
   const tasks = {
     ...allTasks,
@@ -446,7 +464,7 @@ async function renderItems(
       hiddenNote(hidden.decisions, showAll, workspace) +
       (decisionRows || empty) +
       `<h2 class="section" id="handoffs">Handoff</h2>` +
-      hiddenNote(hidden.handoffs, showAll, workspace) +
+      hiddenNote(hidden.handoffs, showAll, workspace, "ที่ไม่ต้องรับแล้ว") +
       (handoffRows || empty) +
       `<h2 class="section" id="tasks">งาน</h2>` +
       hiddenNote(hidden.tasks, showAll, workspace) +
