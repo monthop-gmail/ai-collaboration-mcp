@@ -25,7 +25,7 @@ import {
   type DecisionStatus,
   type TaskStatus,
 } from "./db-work";
-import { Limit, Workspace, actedAs, handoffReminder, registerTool, run } from "./tool-kit";
+import { Limit, Workspace, actedAs, crossTaskWarning, handoffReminder, registerTool, run } from "./tool-kit";
 
 const Detail = z.string().describe("Full reasoning or context. Be specific — this is what a participant who was not present will read.");
 
@@ -354,8 +354,23 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           assigned_to,
           detail,
         });
+        const crossTask = crossTaskWarning(
+          task.title,
+          task.assigned_to,
+          task.updated_by,
+          task.status,
+        );
         return {
           task_id: task.id,
+          // `title` อยู่ในผลลัพธ์เพราะ **ช่องนี้เป็นช่องเดียวที่บอกว่า "ใบไหน"**
+          //
+          // 27 ก.ย. มีการเขียนบันทึกผลของ ThaiACC ลงในใบของ CARE แล้วกดปิด ส่วนใบ
+          // ThaiACC ตัวจริงยังเปิดอยู่ · ผู้เรียกไม่มีอะไรในผลลัพธ์ให้ทักตัวเองเลย
+          // เพราะทุกช่องที่คืนกลับมาถูกต้องทั้งหมด — แค่เป็นของใบอื่น
+          //
+          // เซิร์ฟเวอร์ตรวจแทนไม่ได้ว่าเนื้อหาเข้ากับใบไหม (ดู `crossTaskWarning`)
+          // สิ่งที่ทำได้คือ **คืนชื่อใบมาให้เห็น** แล้วผู้เรียกจับได้เอง
+          title: task.title,
           status: task.status,
           assigned_to: task.assigned_to,
           updated_by: task.updated_by,
@@ -367,6 +382,9 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           ...(assigned_to != null && handoffReminder(assigned_to)
             ? { note: handoffReminder(assigned_to) }
             : {}),
+          // แยกช่องจาก `note` โดยตั้งใจ — สองอย่างนี้เตือนคนละเรื่องและเกิดพร้อมกันได้
+          // ใช้ช่องเดียวกันแล้วอันหนึ่งจะกลบอีกอันเงียบ ๆ
+          ...(crossTask ? { cross_task_warning: crossTask } : {}),
         };
       }),
   );
@@ -513,6 +531,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           handoff_id: handoff.id,
           accepted_by: handoff.accepted_by,
           task_id: task.id,
+          // เหตุผลเดียวกับ `update_task` — ผู้รับควรเห็นว่ารับใบไหนไว้ ไม่ใช่แค่รหัส
+          task_title: task.title,
           task_status: task.status,
           task_assigned_to: task.assigned_to,
           acted_as: actedAs(handoff.to_whom, handoff.accepted_by),
