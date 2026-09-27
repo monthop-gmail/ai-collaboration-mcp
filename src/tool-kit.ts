@@ -229,6 +229,53 @@ export function actedAs(
   };
 }
 
+/**
+ * transition ที่ถ้าลงผิดใบแล้วอ่านเหมือนงานเสร็จ
+ *
+ * `done` กับ `blocked` เปลี่ยนความหมายของใบในสายตาคนอื่น — ใบที่ถูกปิดผิดจะหายจาก
+ * รายการงานค้างของทุกคน ส่วนใบตัวจริงยังเปิดอยู่โดยไม่มีใครดู · การเปลี่ยนเจ้าของก็
+ * เหมือนกัน เพราะย้ายความรับผิดชอบไปหาคนที่ไม่รู้ตัว
+ */
+const HIGH_IMPACT: ReadonlySet<string> = new Set(["done", "blocked"]);
+
+/**
+ * คำเตือนสำหรับการแก้ใบที่ **ผู้ลงมือไม่ใช่ผู้ที่ใบระบุ** และเป็น transition ที่ผลกระทบสูง
+ *
+ * ## ทำไมเป็นคำเตือน ไม่ใช่การปฏิเสธ
+ *
+ * 27 ก.ย. มีการเขียนบันทึกผลของงาน ThaiACC ลงในใบของ CARE แล้วกดปิด ส่วนใบ ThaiACC
+ * ตัวจริงยังเปิดอยู่ (`dis-65f4fe3e` seq 8) · `care-agent-platform` จับได้เองและซ่อม
+ *
+ * **วัดบนโต๊ะจริงแล้วว่าแยกด้วยตัวตนไม่ได้** — ใบที่ `updated_by` ต่างจาก `assigned_to`
+ * มี 31 ใบ และ 27 ใบเป็น `done` · เกือบทั้งหมดถูกต้อง เพราะงานข้ามทีมเป็นเรื่องปกติที่นี่
+ *
+ * และตัวแยกที่ดูน่าจะได้ — *"เคยรับ handoff บนใบนั้นไหม"* — **เป็นโมฆะโดยโครงสร้าง**
+ * เพราะ `accept_handoff` ตั้ง `assigned_to` เป็นชื่อผู้รับ · เส้นทางที่ถูกต้องจึงไม่เคย
+ * ปรากฏเป็น delegated เลยแม้แต่ใบเดียว · วัดได้ศูนย์จากศูนย์ ไม่ใช่ศูนย์เพราะข้อมูลน้อย
+ *
+ * **จึงไม่บังคับ flag ยืนยัน** — ถ้าบังคับ จะต้องใส่ในเกือบทุกใบที่ถูกต้อง แล้วมันจะ
+ * กลายเป็นค่าที่ทุกคนใส่โดยไม่อ่าน ซึ่งเป็นโรคเดียวกับ CI แดงที่ไม่ใช่ของจริง คือสอนให้
+ * คนเลิกเชื่อสัญญาณ · สิ่งที่ทำได้จริงคือ **ยื่นข้อมูลให้ผู้เรียกจับได้เอง** ไม่ใช่เดาแทน
+ */
+export function crossTaskWarning(
+  title: string,
+  assignedTo: string | null | undefined,
+  actor: string | null | undefined,
+  status: string | null | undefined,
+): string | undefined {
+  const named = typeof assignedTo === "string" && assignedTo.trim() !== "" ? assignedTo : null;
+  const acting = typeof actor === "string" && actor.trim() !== "" ? actor : null;
+  if (named === null || acting === null || named === acting) return undefined;
+  if (status === null || status === undefined || !HIGH_IMPACT.has(status)) return undefined;
+
+  return (
+    `'${acting}' set status '${status}' on a task the record names '${named}' for: ` +
+    `"${title}". That is allowed. Check this is the task you meant — a completion ` +
+    "note written into the wrong ticket closes work nobody did and leaves the real " +
+    "ticket open with nobody watching it."
+  );
+}
+
 export function handoffReminder(assignedTo: string | null | undefined): string | undefined {
   if (typeof assignedTo !== "string" || assignedTo.trim() === "") return undefined;
 
