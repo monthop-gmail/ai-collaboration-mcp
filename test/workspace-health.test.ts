@@ -78,6 +78,11 @@ interface Health {
     oldest: string;
     evidence: string;
   }>;
+  done_without_result: {
+    tasks: Array<{ id: string; title: string; status: string }>;
+    total: number;
+    note: string;
+  };
   accepted_not_finished: {
     tasks: Array<{
       task_id: string;
@@ -382,6 +387,8 @@ describe("โต๊ะที่ไม่มีอะไรค้าง", () => {
       open_tasks: { unstarted: 0, parked: { tasks: [], total: 0 } },
       unseen_targets: [],
       accepted_not_finished: { tasks: [], total: 0 },
+      // `note` ติดมาเสมอแม้ยอดเป็นศูนย์ — ตัวเลขที่ถูกอ่านผิดครั้งแรกจะถูกเลิกอ่านตลอดไป
+      done_without_result: { tasks: [], total: 0, note: expect.any(String) },
     });
   });
 });

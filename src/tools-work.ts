@@ -362,8 +362,11 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     "update_task",
     {
       description:
-        "Change a task's status, owner, or detail. Pass at least one of them. " +
-        "Your name is recorded as the one who made the change.",
+        "Change a task's status, owner, detail, or result pointer. Pass at least " +
+        "one of them. Your name is recorded as the one who made the change. " +
+        "When you finish a task, set 'result_ref' as well as the status — a task " +
+        "marked done with no pointer cannot be told apart from one whose result " +
+        "was never written down.",
       inputSchema: z.object({
         task_id: z.string().min(1),
         status: z.enum(TASK_STATUSES).optional(),
@@ -376,14 +379,24 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
               "to leave the task with no owner.",
           ),
         detail: z.string().optional(),
+        result_ref: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            "Where the result of this work can be read — a discussion reference " +
+              "like 'dis-xxxx#12', a URL, or a commit. This is a pointer, not the " +
+              "result itself. Pass null to take an existing pointer off.",
+          ),
       }),
     },
-    async ({ task_id, status, assigned_to, detail }) =>
+    async ({ task_id, status, assigned_to, detail, result_ref }) =>
       run(async () => {
         const task = await updateTask(env.DB, task_id, author(), {
           status: status as TaskStatus | undefined,
           assigned_to,
           detail,
+          result_ref,
         });
         const crossTask = crossTaskWarning(
           task.title,
@@ -407,6 +420,9 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           updated_by: task.updated_by,
           acted_as: actedAs(task.assigned_to, task.updated_by),
           updated_at: task.updated_at,
+          // คืนเสมอ แม้เป็น null — ผู้เรียกต้องแยก *ยังไม่มีใครบันทึกตัวชี้* ออกจาก
+          // *ระบบไม่เก็บช่องนี้* ได้จากผลลัพธ์เดียว
+          result_ref: task.result_ref,
           // เช่นเดียวกับ create_task — บอกตรง ๆ ว่ามี handoff รออยู่หรือไม่ ไม่ใช่เงียบ
           handoff: await getCurrentHandoffId(env.DB, task.id),
           // เตือนเฉพาะตอนที่ผู้เรียกเปลี่ยนผู้รับผิดชอบเองในคำสั่งนี้
