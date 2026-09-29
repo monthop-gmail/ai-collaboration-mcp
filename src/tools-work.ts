@@ -25,7 +25,17 @@ import {
   type DecisionStatus,
   type TaskStatus,
 } from "./db-work";
-import { Limit, Workspace, actedAs, crossTaskWarning, handoffReminder, registerTool, run } from "./tool-kit";
+import {
+  Limit,
+  Workspace,
+  actedAs,
+  crossTaskWarning,
+  handoffReminder,
+  registerTool,
+  run,
+  sharedIdentityNote,
+  usedWorkspace,
+} from "./tool-kit";
 
 const Detail = z.string().describe("Full reasoning or context. Be specific — this is what a participant who was not present will read.");
 
@@ -53,18 +63,25 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     },
     async ({ title, detail, workspace, discussion_id }) =>
       run(async () => {
+        const ws = usedWorkspace(workspace);
+        const me = author();
         const decision = await recordDecision(
           env.DB,
-          workspace,
+          ws.id,
           title,
           detail,
-          author(),
+          me,
           discussion_id,
         );
         return {
           decision_id: decision.id,
           status: decision.status,
           proposed_by: decision.proposed_by,
+          workspace: ws.id,
+          workspace_source: ws.source,
+          ...(sharedIdentityNote(me.client)
+            ? { identity_note: sharedIdentityNote(me.client) }
+            : {}),
           note: "สถานะเป็น 'proposed' — ยังไม่มีใครอนุมัติ",
         };
       }),
@@ -87,7 +104,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       run(async () => {
         const page = await readDecisions(
           env.DB,
-          workspace,
+          usedWorkspace(workspace).id,
           limit,
           status as DecisionStatus | undefined,
         );
@@ -236,7 +253,9 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     },
     async ({ title, body, workspace, discussion_id, decision_id, supersedes }) =>
       run(async () => {
-        const plan = await recordPlan(env.DB, workspace, title, body, author(), {
+        const ws = usedWorkspace(workspace);
+        const me = author();
+        const plan = await recordPlan(env.DB, ws.id, title, body, me, {
           discussionId: discussion_id,
           decisionId: decision_id,
           supersedes,
@@ -245,6 +264,11 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           plan_id: plan.id,
           created_by: plan.created_by,
           supersedes: plan.supersedes,
+          workspace: ws.id,
+          workspace_source: ws.source,
+          ...(sharedIdentityNote(me.client)
+            ? { identity_note: sharedIdentityNote(me.client) }
+            : {}),
           note: "แผนแก้ไม่ได้ ถ้าเปลี่ยนให้บันทึกใหม่แล้วระบุ supersedes",
         };
       }),
@@ -270,7 +294,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     },
     async ({ workspace, discussion_id, include_superseded, limit }) =>
       run(async () => {
-        const page = await readPlans(env.DB, workspace, limit, {
+        const page = await readPlans(env.DB, usedWorkspace(workspace).id, limit, {
           discussionId: discussion_id,
           includeSuperseded: include_superseded,
         });
@@ -303,12 +327,14 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     },
     async ({ title, detail, workspace, discussion_id, assigned_to }) =>
       run(async () => {
+        const ws = usedWorkspace(workspace);
+        const me = author();
         const task = await createTask(
           env.DB,
-          workspace,
+          ws.id,
           title,
           detail,
-          author(),
+          me,
           discussion_id,
           assigned_to,
         );
@@ -317,6 +343,11 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           status: task.status,
           assigned_to: task.assigned_to,
           created_by: task.created_by,
+          workspace: ws.id,
+          workspace_source: ws.source,
+          ...(sharedIdentityNote(me.client)
+            ? { identity_note: sharedIdentityNote(me.client) }
+            : {}),
           // ระบุออกมาตรง ๆ ว่ายังไม่มี handoff เพื่อไม่ให้ผู้เรียกเล่าว่าส่งต่อแล้ว
           handoff: null,
           ...(handoffReminder(task.assigned_to)
@@ -407,7 +438,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     },
     async ({ workspace, status, assigned_to, limit }) =>
       run(async () => {
-        const page = await readTasks(env.DB, workspace, limit, {
+        const page = await readTasks(env.DB, usedWorkspace(workspace).id, limit, {
           status: status as TaskStatus | undefined,
           assigned_to,
         });
@@ -490,7 +521,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     },
     async ({ workspace, status, to, task_id, limit }) =>
       run(async () => {
-        const page = await readHandoffs(env.DB, workspace, limit, {
+        const page = await readHandoffs(env.DB, usedWorkspace(workspace).id, limit, {
           status,
           to_whom: to,
           task_id,

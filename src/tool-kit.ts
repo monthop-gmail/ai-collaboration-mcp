@@ -9,6 +9,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { DEFAULT_WORKSPACE } from "./env";
+import { mechanismOfClient } from "./identity";
 import { RequestError } from "./db";
 
 /**
@@ -75,10 +76,57 @@ export function registerTool<Schema extends z.ZodType>(
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 200;
 
+/**
+ * `workspace` เป็น optional ไม่ใช่ `.default()` — **ตั้งใจ**
+ *
+ * `.default()` เติมค่าให้ตั้งแต่ตอน parse ตัวจัดการจึงแยกไม่ออกว่าผู้เรียกส่งมาเอง
+ * หรือลืมส่ง · สองกรณีนี้ต่างกันมากเพราะ `DEFAULT_WORKSPACE` คือโต๊ะจริง
+ * **ลืมส่งแล้วไม่ error และไม่ได้เขียนลงที่ของตัวเอง — มันเขียนลงโต๊ะจริง
+ * โดยทุกอย่างดูสำเร็จปกติ**
+ *
+ * ค่าตั้งต้นยังเหมือนเดิมทุกประการ เปลี่ยนแค่ว่าเติมที่ไหน — เติมในตัวจัดการผ่าน
+ * `usedWorkspace()` แทนที่จะเติมใน schema · ความหมายของคีย์ไม่เปลี่ยน ตรงกับ ADR-0028
+ */
 export const Workspace = z
   .string()
-  .default(DEFAULT_WORKSPACE)
-  .describe(`Workspace id. Defaults to '${DEFAULT_WORKSPACE}'.`);
+  .optional()
+  .describe(`Workspace id. Defaults to '${DEFAULT_WORKSPACE}' when omitted.`);
+
+/**
+ * ขอบเขตที่ใช้จริง พร้อมที่มาของมัน
+ *
+ * **ต้องตัดสินจาก "ผู้เรียกส่งมาไหม" ไม่ใช่จาก "ค่าที่ได้เท่ากับค่าตั้งต้นไหม"** —
+ * ผู้เรียกที่ตั้งใจระบุ `ws-001` กับผู้เรียกที่ลืมส่ง ได้ค่าเดียวกันแต่เป็นคนละเรื่อง
+ * ถ้าตัดสินจากค่า ฟิลด์นี้จะไม่ได้บอกอะไรเลย · มีเทสต์เฉพาะข้อนี้
+ */
+export function usedWorkspace(workspace?: string): {
+  id: string;
+  source: "caller" | "default";
+} {
+  return workspace === undefined
+    ? { id: DEFAULT_WORKSPACE, source: "default" }
+    : { id: workspace, source: "caller" };
+}
+
+/**
+ * เตือนเมื่อผู้เรียกไม่มีชื่อผูกกับตัวเอง
+ *
+ * `static-bearer` กลืนสองกรณีที่ต่างกันจริง — โทเคนกลางที่ตั้ง `STATIC_CLIENT_NAME`
+ * ไว้ กับโทเคนกลางที่ไม่ตั้งอะไรเลย · ทั้งคู่ไม่มีอะไรผูกกับรหัส หลายทีมที่ใช้โทเคน
+ * เดียวกันจึงถูกบันทึกเป็นชื่อเดียวกัน **โดยไม่มีทางไหน error**
+ *
+ * กระทบตรง ๆ กับ `waiting_for_you` ซึ่งจับคู่จากชื่อผู้เรียก — ใช้ชื่อร่วมกันแล้ว
+ * จะเห็นงานของทีมอื่นปนมาและมองไม่เห็นว่าปน
+ *
+ * คืนเฉพาะตอนที่เป็นจริง **ไม่คืนคีย์เปล่า** เพราะคีย์ที่มีค่าว่างทุกครั้งจะถูกอ่านผ่าน
+ */
+export function sharedIdentityNote(client: string): string | undefined {
+  if (mechanismOfClient(client) !== "static-bearer") return undefined;
+  return (
+    "ผู้เรียกไม่มีชื่อผูกกับตัวเอง — ทุกทีมที่ใช้โทเคนใบนี้ถูกบันทึกเป็นชื่อเดียวกัน " +
+    "และ waiting_for_you จะปนกัน · ตั้ง X-Client-Name หรือใช้โทเคนที่ผูกชื่อไว้"
+  );
+}
 
 export const Limit = z
   .number()
