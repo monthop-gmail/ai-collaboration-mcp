@@ -569,6 +569,7 @@ describe("ภาพรวมบนเส้นอ่าน ได้ของช
     expect(Object.keys(result.open_items.health).sort()).toEqual([
       "accepted_not_finished",
       "delegated",
+      "done_without_result",
       "handoffs",
       "open_tasks",
       "unseen_targets",

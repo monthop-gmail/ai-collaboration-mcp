@@ -65,6 +65,13 @@ export interface Task {
   created_at: string;
   updated_by: string | null;
   updated_at: string | null;
+  /**
+   * ตัวชี้ว่าผลอยู่ที่ไหน ไม่ใช่ที่เก็บผล
+   *
+   * `null` แปลว่า **ยังไม่มีใครบันทึกตัวชี้** ไม่ได้แปลว่าไม่มีผล — ใบเก่าทุกใบเป็น
+   * `null` เพราะไม่เคยมีช่องให้กรอก · ผู้อ่านต้องแยกสองอย่างนี้จากผลลัพธ์เดียว
+   */
+  result_ref: string | null;
 }
 
 /**
@@ -448,6 +455,8 @@ export async function createTask(
     created_at: now(),
     updated_by: null,
     updated_at: null,
+    // งานที่เพิ่งเปิดยังไม่มีผล — คืนคีย์ที่บอกว่า "ยังไม่มีตัวชี้" ไม่ใช่ปล่อยให้คีย์หาย
+    result_ref: null,
   };
 
   await db
@@ -490,7 +499,12 @@ export async function updateTask(
   db: D1Database,
   id: string,
   author: Author,
-  changes: { status?: TaskStatus; assigned_to?: string | null; detail?: string },
+  changes: {
+    status?: TaskStatus;
+    assigned_to?: string | null;
+    detail?: string;
+    result_ref?: string | null;
+  },
 ): Promise<Task> {
   await getTask(db, id);
 
@@ -509,9 +523,15 @@ export async function updateTask(
     params.push(changes.detail);
     sets.push(`detail = ?${params.length}`);
   }
+  // ส่ง null มาได้ แปลว่าถอนตัวชี้ออก ไม่ใช่ "ไม่ได้ส่งมา" — `undefined` ต่างหาก
+  // ที่แปลว่าไม่แตะ · สองอย่างนี้ต้องไม่ยุบเป็นค่าเดียว
+  if (changes.result_ref !== undefined) {
+    params.push(changes.result_ref);
+    sets.push(`result_ref = ?${params.length}`);
+  }
 
   if (sets.length === 0) {
-    throw new RequestError("ต้องระบุอย่างน้อยหนึ่งอย่างที่จะแก้ (status, assigned_to หรือ detail)");
+    throw new RequestError("ต้องระบุอย่างน้อยหนึ่งอย่างที่จะแก้ (status, assigned_to, detail หรือ result_ref)");
   }
 
   params.push(author.name);
@@ -1262,6 +1282,18 @@ export interface WorkspaceHealth {
    * ผลคือยอดที่ควรจะฟ้องกลับฟ้องผิดทุกวันจนไม่มีใครดู
    */
   open_tasks: { unstarted: number; parked: { tasks: WaitingTask[]; total: number } };
+  /**
+   * ใบที่ปิดแล้วแต่ไม่มีตัวชี้ผล — **`done` ไม่เท่ากับ `ผลถูกบันทึกแล้ว`**
+   *
+   * วัดไว้ใน `dis-c6095786` seq 36: ใบที่ `done` 12 ใบล่าสุด มีสามใบที่ `detail`
+   * ยังเป็นคำสั่งที่สั่งให้ส่งผลกลับ และ **อนุมานจาก `updated_at` ไม่ได้** เพราะเวลา
+   * ขยับทุกใบที่ปิด ไม่ว่าจะเขียนผลกลับหรือไม่
+   *
+   * **ตัวเลขในวันแรกจะใหญ่และนั่นไม่ใช่ความผิดพลาด** — ใบเก่าทุกใบไม่เคยมีช่องให้
+   * กรอก ส่วนใหญ่มีผลอยู่ในกระทู้ครบถ้วน · `note` จึงติดมาด้วยเสมอ เพราะตัวเลขที่
+   * ถูกอ่านผิดครั้งแรกจะถูกเลิกอ่านตลอดไป
+   */
+  done_without_result: { tasks: WaitingTask[]; total: number; note: string };
   /** ปลายทางของ handoff ที่ค้าง ซึ่งชื่อนั้นไม่เคยลงมืออะไรในโต๊ะนี้เลย */
   unseen_targets: UnseenTarget[];
   /**
@@ -1349,7 +1381,16 @@ export async function readWorkspaceHealth(
   const cutoff = staleCutoff();
   const inactive = INACTIVE_HANDOFF;
 
-  const [ages, delegatedHandoffs, delegatedTasks, openTasks, stalled, targets, ...actorRows] =
+  const [
+    ages,
+    delegatedHandoffs,
+    delegatedTasks,
+    openTasks,
+    stalled,
+    targets,
+    unrecorded,
+    ...actorRows
+  ] =
     await db.batch([
     db
       .prepare(
@@ -1426,6 +1467,16 @@ export async function readWorkspaceHealth(
           ORDER BY oldest`,
       )
       .bind(workspaceId),
+    db
+      .prepare(
+        // ปิดแล้วแต่ไม่มีตัวชี้ผล · `IS NULL` ตรงนี้แปลว่า "ไม่มีใครบันทึกตัวชี้"
+        // ไม่ใช่ "ไม่มีผล" — ความต่างข้อนี้อยู่ใน `note` ที่ติดไปกับผลลัพธ์
+        `SELECT id, title, status
+           FROM tasks
+          WHERE workspace_id = ?1 AND status = 'done' AND result_ref IS NULL
+          ORDER BY updated_at DESC`,
+      )
+      .bind(workspaceId),
     ...ACTOR_QUERIES.map((sql) => db.prepare(sql).bind(workspaceId)),
   ]);
 
@@ -1466,6 +1517,16 @@ export async function readWorkspaceHealth(
     accepted_not_finished: {
       tasks: (stalled.results as AcceptedNotFinished[]).slice(0, WAITING_PREVIEW),
       total: stalled.results.length,
+    },
+    done_without_result: {
+      tasks: (unrecorded.results as WaitingTask[]).slice(0, WAITING_PREVIEW),
+      total: unrecorded.results.length,
+      // **ห้ามเอ่ยชื่อ tool ฝั่งเขียนในข้อความนี้** — `health` เดินทางไปถึงเส้นอ่าน
+      // อย่างเดียวด้วย ซึ่ง tool เหล่านั้นถูกซ่อนไว้ · บอกให้เรียกของที่เรียกไม่ได้
+      // แย่กว่าไม่บอกอะไรเลย · เทสต์ใน readonly.test.ts กันข้อนี้ไว้และจับได้จริง
+      note:
+        "ไม่มีตัวชี้ผล ไม่ได้แปลว่าไม่มีผล — ใบก่อนไมเกรชัน 0005 ไม่เคยมีช่องให้กรอก " +
+        "ส่วนใหญ่มีผลอยู่ในกระทู้ครบถ้วน · บันทึกตัวชี้ได้ตอนแก้ใบ",
     },
     unseen_targets: (
       targets.results as Array<{ name: string; pending_handoffs: number; oldest: string }>

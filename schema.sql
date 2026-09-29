@@ -147,7 +147,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at        TEXT NOT NULL,
   -- คนล่าสุดที่แก้ ยังไม่ได้เก็บประวัติทั้งหมด ดู NOTES หัวข้อข้อจำกัด
   updated_by        TEXT,
-  updated_at        TEXT
+  updated_at        TEXT,
+
+  -- ตัวชี้ว่าผลอยู่ที่ไหน ไม่ใช่ที่เก็บผล · NULL แปลว่ายังไม่มีใครบันทึกตัวชี้
+  -- ไม่ได้แปลว่าไม่มีผล (ไมเกรชัน 0005)
+  result_ref        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace
