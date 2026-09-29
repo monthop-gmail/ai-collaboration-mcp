@@ -11,7 +11,16 @@ import {
   readWorkspaceContext,
   type MessageKind,
 } from "./db";
-import { CONTRACT_VERSION, Limit, QuietForDays, Workspace, registerTool, run } from "./tool-kit";
+import {
+  CONTRACT_VERSION,
+  Limit,
+  QuietForDays,
+  Workspace,
+  registerTool,
+  run,
+  sharedIdentityNote,
+  usedWorkspace,
+} from "./tool-kit";
 import { readOpenItems, readStandingRules } from "./db-work";
 import { readParticipants } from "./participants";
 import { registerWorkTools } from "./tools-work";
@@ -50,7 +59,8 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
     async ({ title, workspace, body, kind }) =>
       run(async () => {
         const me = author();
-        const discussion = await createDiscussion(env.DB, workspace, title, me);
+        const ws = usedWorkspace(workspace);
+        const discussion = await createDiscussion(env.DB, ws.id, title, me);
         const opening =
           body === undefined
             ? undefined
@@ -59,8 +69,12 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         return {
           discussion_id: discussion.id,
           workspace: discussion.workspace_id,
+          workspace_source: ws.source,
           title: discussion.title,
           created_by: discussion.created_by,
+          ...(sharedIdentityNote(me.client)
+            ? { identity_note: sharedIdentityNote(me.client) }
+            : {}),
           opening_message: opening ? { seq: opening.seq, kind: opening.kind } : null,
         };
       }),
@@ -176,7 +190,7 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
     },
     async ({ workspace }) =>
       run(async () => {
-        const report = await readParticipants(env.DB, workspace);
+        const report = await readParticipants(env.DB, usedWorkspace(workspace).id);
         return {
           contract: CONTRACT_VERSION,
           workspace,
@@ -218,10 +232,11 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
     async ({ workspace, limit, quiet_for_days }) =>
       run(async () => {
         const me = author();
+        const wsId = usedWorkspace(workspace).id;
         const [context, openItems, standingRules] = await Promise.all([
-          readWorkspaceContext(env.DB, workspace, limit, quiet_for_days),
-          readOpenItems(env.DB, workspace, me.name),
-          readStandingRules(env.DB, workspace),
+          readWorkspaceContext(env.DB, wsId, limit, quiet_for_days),
+          readOpenItems(env.DB, wsId, me.name),
+          readStandingRules(env.DB, wsId),
         ]);
 
         return {
