@@ -242,7 +242,12 @@ function renderList(
       `<div class="bar">` +
       `<span><a href="${items}#decisions"><b>${open.decisions_awaiting}</b> decision รอเคาะ</a></span>` +
       `<span><a href="${items}#handoffs"><b>${open.handoffs_pending}</b> handoff รอคนรับ</a></span>` +
-      `<span><a href="${items}#handoffs"><b>${open.handoffs_inactive}</b> handoff ตกยุค</a></span>` +
+      // ไม่แสดง `handoffs_inactive` บนแถบนี้ — ใบที่ไม่ต้องรับแล้วไม่ใช่ของที่ต้องทำ
+      // และเลขสองหลักข้าง ๆ เลขที่ต้องทำจริงทำให้อ่านผิดว่ามีงานค้างมากกว่าที่เป็น
+      //
+      // **ไม่ได้ทำให้มันเงียบ** — ส่วน Handoff ยังบอกว่า "ซ่อน N รายการที่ไม่ต้องรับแล้ว"
+      // พร้อมลิงก์ดูทั้งหมดเหมือนเดิม และ `get_workspace_context` ยังคืนค่านี้ตามสัญญา
+      // ถ้าจะตัดทิ้งทั้งเส้น ต้องตัดที่นั่นด้วย ซึ่งทำไม่ได้เพราะ contract ห้ามลบคีย์
       `<span><a href="${items}#tasks">งานค้าง: ${tasks || "ไม่มี"}</a></span>` +
       `<span><a href="#rules"><b>${rules.length}</b> กติกาของโต๊ะ</a></span>` +
       `<span title="${esc(CONTRACT_TITLE)}">contract ${CONTRACT_VERSION}</span>` +
