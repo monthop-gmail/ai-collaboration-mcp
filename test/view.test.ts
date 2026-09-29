@@ -782,3 +782,42 @@ describe("ของที่ค้างต้องไม่หายเพร�
     expect(html).not.toContain("task-filler-0");
   });
 });
+
+/**
+ * ใบที่ไม่ต้องรับแล้วไม่ใช่ของที่ต้องทำ จึงไม่อยู่บนแถบสรุป — แต่ต้องไม่เงียบ
+ *
+ * เดิมแถบบนสุดวาง "N handoff ตกยุค" ไว้ข้าง "N handoff รอคนรับ" ทำให้อ่านผิดว่ามี
+ * งานค้างมากกว่าที่เป็นจริง (23 ต่อ 2 ตอนที่เจ้าของงานทัก)
+ *
+ * การเอาออกจากแถบไม่ใช่การซ่อน — ส่วน Handoff ยังบอกจำนวนที่ซ่อนพร้อมลิงก์ดูทั้งหมด
+ * เทสต์นี้จึงมีทั้งกรณีลบ (ไม่อยู่บนแถบ) และกรณีบวก (ยังบอกอยู่ในส่วนของมัน)
+ * ถ้ามีแต่กรณีลบ การลบทิ้งทั้งเส้นก็จะผ่านด้วย ซึ่งไม่ใช่สิ่งที่ต้องการ
+ */
+describe("แถบสรุปบอกเฉพาะของที่ต้องทำ", () => {
+  it("ไม่โชว์จำนวน handoff ที่ตกยุคบนแถบ แต่ยังบอกในส่วนของมัน", async () => {
+    const closed = await createTask(env.DB, WS, "งานที่ปิดแล้ว", "", chatgpt);
+    await createHandoff(env.DB, closed.id, "Claude", "ของที่ตกยุค", chatgpt);
+    await updateTask(env.DB, closed.id, chatgpt, { status: "done" });
+
+    const home = await handleView(
+      get("/view", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const homeHtml = await home!.text();
+
+    // กรณีลบ — ไม่อยู่บนแถบสรุปแล้ว
+    expect(homeHtml).not.toContain("handoff ตกยุค");
+    // ของที่ต้องทำยังอยู่ครบ — กันการลบพลาดไปทั้งแถบ
+    expect(homeHtml).toContain("handoff รอคนรับ");
+    expect(homeHtml).toContain("decision รอเคาะ");
+
+    // กรณีบวก — ยังบอกว่าซ่อนอะไรไว้ พร้อมทางไปดู
+    const items = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const itemsHtml = await items!.text();
+    expect(itemsHtml).toContain("ซ่อน 1 รายการที่ไม่ต้องรับแล้ว");
+    expect(itemsHtml).toContain("all=1");
+  });
+});
