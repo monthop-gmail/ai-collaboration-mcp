@@ -16,6 +16,7 @@
 import { readMessages, readWorkspaceContext, getDiscussion } from "./db";
 import {
   readDecisions,
+  readHandoffStateCounts,
   readItemTotals,
   readHandoffs,
   readOpenItems,
@@ -388,8 +389,9 @@ async function renderItems(
   //
   // **มันกลับหัว** — ใบที่รอนานที่สุดคือใบที่รับประกันว่าจะมองไม่เห็น ซึ่งตรงข้ามกับ
   // เหตุผลที่หน้านี้มีอยู่
-  const [totals, decisions, handoffs, tasks] = await Promise.all([
+  const [totals, states, decisions, handoffs, tasks] = await Promise.all([
     readItemTotals(env.DB, workspace),
+    readHandoffStateCounts(env.DB, workspace),
     readDecisions(env.DB, workspace, ITEM_LIMIT, showAll ? undefined : "proposed"),
     readHandoffs(env.DB, workspace, ITEM_LIMIT, showAll ? {} : { actionable: true }),
     readTasks(env.DB, workspace, ITEM_LIMIT, showAll ? {} : { exclude_done: true }),
@@ -460,7 +462,8 @@ async function renderItems(
     `<div class="top"><h1>${showAll ? "ของทั้งหมด" : "ของที่ค้าง"}ใน ${esc(workspace)}</h1>` +
       `<a class="muted" href="${back}">← กลับ</a></div>` +
       `<div class="muted">ทั้ง workspace มี decision ${totals.decisions} · ` +
-      `handoff ${totals.handoffs} · งาน ${totals.tasks}` +
+      `handoff ${totals.handoffs} (obsolete ${states.obsolete} · ` +
+      `superseded ${states.superseded}) · งาน ${totals.tasks}` +
       truncatedNote(decisions, "decision") +
       truncatedNote(handoffs, "handoff") +
       truncatedNote(tasks, "งาน") +

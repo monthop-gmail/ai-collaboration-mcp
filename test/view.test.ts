@@ -821,3 +821,46 @@ describe("แถบสรุปบอกเฉพาะของที่ต้�
     expect(itemsHtml).toContain("all=1");
   });
 });
+
+/**
+ * แยก "ไม่ต้องรับแล้ว" ออกเป็นสองเหตุ เพราะมันคนละเรื่องกัน
+ *
+ * 30 ก.ย. 2026 เจ้าของงานนับป้าย `obsolete` บนหน้าดูทั้งหมดได้ 16 ทั้งที่แถบบอก 23
+ * สองเหตุ — `handoffs_inactive` รวม `superseded` เข้ามาด้วย และหน้าดูทั้งหมดเองก็ยัง
+ * ติดเพดาน 200 แถว · การบอกตัวเลขแทนทำให้ไม่ต้องนับมือแล้วสงสัย
+ *
+ * ตัวนับเรียก `handoffState` ตัวเดียวกับที่ใช้ทำป้ายบนแถว เทสต์นี้จึงพิสูจน์ด้วยว่า
+ * สองทางให้คำตอบตรงกัน ไม่ใช่แค่ว่าตัวเลขโผล่
+ */
+describe("แยกเหตุที่ไม่ต้องรับแล้ว", () => {
+  it("นับ obsolete กับ superseded แยกกัน และตรงกับป้ายบนแถว", async () => {
+    // obsolete — งานปลายทางปิดแล้ว · **ต้องไม่เท่ากับจำนวน superseded**
+    // ตอนแรกตั้งไว้อย่างละ 1 แล้วมิวแทนต์ที่สลับสองค่ารอด เพราะผลออกมาเหมือนกันเป๊ะ
+    const closed = await createTask(env.DB, WS, "งานที่ปิดแล้ว", "", chatgpt);
+    await createHandoff(env.DB, closed.id, "Claude", "ใบที่ตกยุค", chatgpt);
+    const closed2 = await createTask(env.DB, WS, "อีกงานที่ปิดแล้ว", "", chatgpt);
+    await createHandoff(env.DB, closed2.id, "Claude", "ใบที่ตกยุคใบสอง", chatgpt);
+    await updateTask(env.DB, closed.id, chatgpt, { status: "done" });
+    await updateTask(env.DB, closed2.id, chatgpt, { status: "done" });
+
+    // superseded — งานยังเปิด แต่มีใบใหม่กว่าทับ
+    const live = await createTask(env.DB, WS, "งานที่ยังเปิด", "", chatgpt);
+    await createHandoff(env.DB, live.id, "Claude", "ใบเก่า", chatgpt);
+    await createHandoff(env.DB, live.id, "Claude", "ใบใหม่", chatgpt);
+
+    const res = await handleView(
+      get("/view/items?all=1", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain("obsolete 2 · superseded 1");
+
+    // ตัวเลขต้องตรงกับจำนวนป้ายที่แสดงจริง ไม่ใช่มาจากนิยามคนละชุด
+    const badge = (state: string) => html.split(`>${state}<`).length - 1;
+    expect(badge("obsolete")).toBe(2);
+    expect(badge("superseded")).toBe(1);
+    // และใบที่ยังต้องรับจริงต้องไม่ถูกนับปนเข้าไป
+    expect(badge("waiting")).toBe(1);
+  });
+});
