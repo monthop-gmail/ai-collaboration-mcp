@@ -39,6 +39,14 @@ done
 # ตอนรัน ไม่ใช่ตอนตรวจ · `bash -n` ผ่านฉลุยเพราะมันไม่แตะข้างใน · ใช้ % หรือ + ต่อสตริงแทน
 # เจอมาแล้วตอนเขียนไฟล์นี้ · ด่านที่จับได้คือยิงสคริปต์จริงใส่เซิร์ฟเวอร์จำลอง ไม่ใช่ lint
 
+# `call` แกะเปลือก MCP ออกให้ แล้วคืน**เนื้อของ tool ล้วน ๆ**
+#
+# การตรวจว่าคำตอบอ่านได้จริงอยู่ที่นี่ที่เดียว เพราะรุ่นแรกกระจายไปอยู่ในผู้เรียกแต่ละราย
+# แล้วเส้นทางที่แค่ "อ่าน" เขียน `.get("result", {})` ไว้ — **ทุกความล้มเหลวจึงกลายเป็น
+# รายการว่าง และถูกพิมพ์ออกมาว่า "ไม่มีใบที่รออยู่"** ทั้งที่อาจเป็นโทเคนผิดหรือ tool ตอบ error
+#
+# นั่นคือ `absent` ถูกยุบเป็น `empty` ซึ่งเป็นข้อที่กติการีโปห้ามไว้ตรง ๆ · เจอของจริง 29 ก.ย.
+# ตอนสคริปต์บอกว่าโต๊ะไม่มีใบรอ ทั้งที่มี 14 ใบ
 rpc_id=0
 call() {
   local name="$1" args="$2" raw line payload
@@ -50,21 +58,67 @@ call() {
         -d "{\"jsonrpc\":\"2.0\",\"id\":$rpc_id,\"method\":\"tools/call\",\"params\":{\"name\":\"$name\",\"arguments\":$args}}")"; then
     stop "เรียก $name ไม่สำเร็จ — ไม่สรุปว่าเคาะแล้ว"
   fi
+  # ปลายทางตอบ JSON เปล่า แต่รองรับ SSE ไว้ด้วยเผื่อเปลี่ยน
   line="$(printf '%s' "$raw" | grep '^data:' | head -1 || true)"
   payload="${line#data:}"
   [ -n "$payload" ] || payload="$raw"
-  printf '%s' "$payload"
+  printf '%s' "$payload" | NAME="$name" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+name = os.environ["NAME"]
+def die(why):
+    print("\n  ปฏิเสธ: %s (%s)" % (why, name), file=sys.stderr)
+    print("  สิ่งที่เซิร์ฟเวอร์ตอบมา 400 ตัวแรก:", file=sys.stderr)
+    print("  " + raw[:400].replace("\n", "\n  "), file=sys.stderr)
+    sys.exit(3)
+if not raw.strip():
+    die("คำตอบว่างเปล่า")
+try:
+    frame = json.loads(raw)
+except Exception:
+    die("คำตอบไม่ใช่ JSON")
+if frame.get("error"):
+    e = frame["error"]
+    # JSON-RPC ตอบ error เป็น object แต่ตัว worker ตอบ 401 เป็นสตริง — ต้องรับทั้งสองแบบ
+    # ถ้ารับแบบเดียว อีกแบบจะโยน traceback หรือ (แบบเดิม) เงียบแล้วกลายเป็นรายการว่าง
+    if isinstance(e, dict):
+        why = e.get("message") or json.dumps(e, ensure_ascii=False)
+    else:
+        why = str(e)
+        if why == "unauthorized":
+            why += " — โทเคนใน MCP_TOKEN ไม่ผ่าน ไม่ใช่ว่าโต๊ะไม่มีใบ"
+        if frame.get("reason"):
+            why += " · reason=" + str(frame["reason"])
+    die("เซิร์ฟเวอร์ตอบ error: %s" % why)
+res = frame.get("result")
+if not isinstance(res, dict) or not res.get("content"):
+    die("คำตอบไม่มี result.content")
+text = res["content"][0].get("text", "")
+if res.get("isError"):
+    die("tool ตอบว่าไม่สำเร็จ: %s" % text)
+sys.stdout.write(text)'
 }
+
+# อ่านรายการใบจากเนื้อที่ `call` คืนมา · ไม่มีคีย์ `decisions` = อ่านไม่ออก ไม่ใช่ว่าง
+READ_ROWS='
+import json, sys
+raw = sys.stdin.read()
+try:
+    body = json.loads(raw)
+except Exception:
+    print("\n  ปฏิเสธ: เนื้อของ tool ไม่ใช่ JSON", file=sys.stderr); sys.exit(3)
+if "decisions" not in body:
+    print("\n  ปฏิเสธ: คำตอบไม่มีคีย์ decisions — อ่านไม่ออกว่าโต๊ะมีอะไร", file=sys.stderr)
+    print("  " + raw[:400].replace("\n", "\n  "), file=sys.stderr)
+    sys.exit(3)
+rows = body["decisions"]
+'
 
 # ── ไม่ระบุใบ = ดูว่ามีอะไรรออยู่ · อ่านอย่างเดียว ─────────────────────────
 if [ -z "$TARGET" ]; then
   b "ใบที่ยังไม่มีใครเคาะ ใน $WORKSPACE"
-  call get_decisions "{\"workspace\":\"$WORKSPACE\",\"status\":\"proposed\",\"limit\":50}" \
-    | python3 -c '
-import json, sys
-frame = json.load(sys.stdin)
-body = frame.get("result", {}).get("content", [{}])[0].get("text", "{}")
-rows = json.loads(body).get("decisions", [])
+  call get_decisions "{\"workspace\":\"$WORKSPACE\",\"status\":\"proposed\",\"limit\":200}" \
+    | python3 -c "$READ_ROWS"'
 if not rows:
     print("  ไม่มีใบที่รออยู่")
 else:
@@ -73,7 +127,9 @@ else:
         print("    " + d["title"])
         print("    เสนอโดย " + d["proposed_by"] + " · " + d["created_at"])
         print()
-    print("  รวม %d ใบ · เคาะด้วย ./scripts/decide.sh <รหัสใบ>" % len(rows))'
+    print("  รวม %d ใบ · เคาะด้วย ./scripts/decide.sh <รหัสใบ>" % len(rows))
+if body.get("has_more"):
+    print("  (ยังมีมากกว่านี้ — แสดงแค่ 200 ใบแรก)")'
   exit 0
 fi
 
@@ -84,17 +140,18 @@ fi
 # **มันเป็นของใบอื่นเท่านั้น** · ให้คนได้เห็นว่ากำลังเคาะใบไหนก่อนพิมพ์รหัส
 b "ใบที่กำลังจะเคาะ"
 DETAIL="$(call get_decisions "{\"workspace\":\"$WORKSPACE\",\"limit\":200}")"
-printf '%s' "$DETAIL" | TARGET="$TARGET" python3 -c '
-import json, os, sys
-frame = json.load(sys.stdin)
-body = frame.get("result", {}).get("content", [{}])[0].get("text", "{}")
-rows = json.loads(body).get("decisions", [])
+
+FOUND="$(printf '%s' "$DETAIL" | TARGET="$TARGET" python3 -c "$READ_ROWS"'
+import os
 want = os.environ["TARGET"]
 hit = [d for d in rows if d["id"] == want or d["id"].startswith(want)]
 if not hit:
-    print("  ไม่พบใบ " + want + " ใน workspace นี้", file=sys.stderr); sys.exit(2)
+    tail = " (และยังมีใบเกิน 200 ใบที่ยังไม่ได้ดู)" if body.get("has_more") else ""
+    print("\n  ปฏิเสธ: ไม่พบใบ " + want + " ใน " + str(len(rows)) + " ใบที่อ่านมา" + tail, file=sys.stderr)
+    sys.exit(3)
 if len(hit) > 1:
-    print("  รหัสย่อ %s ตรงกับ %d ใบ — ใส่ให้ยาวขึ้น" % (want, len(hit)), file=sys.stderr); sys.exit(2)
+    print("\n  ปฏิเสธ: รหัสย่อ %s ตรงกับ %d ใบ — ใส่ให้ยาวขึ้น" % (want, len(hit)), file=sys.stderr)
+    sys.exit(3)
 d = hit[0]
 print("  รหัส     " + d["id"])
 print("  หัวเรื่อง  " + d["title"])
@@ -106,15 +163,15 @@ print()
 print("  ── เนื้อของใบ ──")
 for ln in (d.get("detail") or "(ไม่มีเนื้อ)").split("\n"):
     print("  " + ln)
-' || exit 2
+print()
+print("__ID__" + d["id"])
+print("__STATUS__" + d["status"])')"
 
-STATUS="$(printf '%s' "$DETAIL" | TARGET="$TARGET" python3 -c '
-import json, os, sys
-body = json.load(sys.stdin)["result"]["content"][0]["text"]
-want = os.environ["TARGET"]
-for d in json.loads(body).get("decisions", []):
-    if d["id"] == want or d["id"].startswith(want):
-        print(d["status"]); break')"
+printf '%s\n' "$FOUND" | grep -v '^__'
+# ใช้รหัสเต็มที่อ่านได้จริง ไม่ใช่รหัสย่อที่ผู้ใช้พิมพ์ — กันการเคาะใบที่ไม่ใช่ใบที่เพิ่งอ่าน
+FULL_ID="$(printf '%s\n' "$FOUND" | sed -n 's/^__ID__//p')"
+STATUS="$(printf '%s\n' "$FOUND" | sed -n 's/^__STATUS__//p')"
+[ -n "$FULL_ID" ] || stop "อ่านรหัสใบไม่ออก"
 
 if [ "$STATUS" != "proposed" ]; then
   stop "ใบนี้สถานะ '$STATUS' แล้ว ไม่ใช่ 'proposed' — เคาะซ้ำไม่ได้"
@@ -137,9 +194,9 @@ printf '  รหัสอนุมัติ (ไม่แสดงผล · เ�
 read -rs CODE
 echo
 
-ARGS="$(VERDICT="$VERDICT" REASON="$REASON" CODE="$CODE" TARGET="$TARGET" python3 -c '
+ARGS="$(VERDICT="$VERDICT" REASON="$REASON" CODE="$CODE" FULL_ID="$FULL_ID" python3 -c '
 import json, os
-a = {"decision_id": os.environ["TARGET"], "verdict": os.environ["VERDICT"], "reason": os.environ["REASON"]}
+a = {"decision_id": os.environ["FULL_ID"], "verdict": os.environ["VERDICT"], "reason": os.environ["REASON"]}
 if os.environ["CODE"]:
     a["approval_code"] = os.environ["CODE"]
 print(json.dumps(a, ensure_ascii=False))')"
@@ -150,13 +207,12 @@ unset CODE ARGS
 
 printf '%s' "$RESULT" | python3 -c '
 import json, sys
-frame = json.load(sys.stdin)
-res = frame.get("result", {})
-text = res.get("content", [{}])[0].get("text", "")
-if res.get("isError") or frame.get("error"):
-    print("  ไม่สำเร็จ:", text or frame.get("error", {}).get("message", ""), file=sys.stderr)
-    sys.exit(1)
-d = json.loads(text)
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("  เคาะไปแล้วแต่อ่านผลกลับไม่ออก — ตรวจด้วย ./scripts/decide.sh ก่อนทำซ้ำ", file=sys.stderr)
+    print("  " + raw[:400], file=sys.stderr); sys.exit(3)
 print("  สถานะ        %s" % d.get("status"))
 print("  ปิดโดย       %s" % d.get("decided_by"))
 print("  ชนิดผู้ปิด    %s" % d.get("decided_by_kind"))
