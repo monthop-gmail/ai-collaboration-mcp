@@ -172,7 +172,15 @@ interface HandoffJoinRow extends Handoff {
   has_newer: number;
 }
 
-function handoffState(row: HandoffJoinRow, cutoff: string): HandoffState {
+/** ข้อมูลเท่าที่ต้องใช้ตัดสิน `state` — ตัวนับดึงแค่นี้ ไม่ต้องลาก context ที่ยาวมาด้วย */
+interface HandoffStateFacts {
+  status: string;
+  task_status: TaskStatus;
+  has_newer: number;
+  created_at: string;
+}
+
+function handoffState(row: HandoffStateFacts, cutoff: string): HandoffState {
   if (row.status === "accepted") return "accepted";
   if (row.task_status === "done") return "obsolete";
   if (row.has_newer) return "superseded";
@@ -361,6 +369,34 @@ export async function readItemTotals(
     handoffs: by.get("handoffs") ?? 0,
     tasks: by.get("tasks") ?? 0,
   };
+}
+
+/**
+ * นับ handoff แยกตาม `state` โดย **เรียก `handoffState` ตัวเดียวกับที่หน้าจอใช้**
+ *
+ * ไม่เขียน `CASE` ใน SQL ซ้ำ เพราะนั่นคือนิยามที่สองที่เพี้ยนจากตัวจริงได้ทุกเมื่อ —
+ * รูปเดียวกับที่ทำให้หัวหน้าจอบอกว่ามีใบรออยู่ แต่รายการข้างล่างว่าง
+ *
+ * ดึงเฉพาะคอลัมน์ที่ตัดสิน state ไม่เอา `context` ที่ยาว จึงไม่ต้องมีเพดาน
+ */
+export async function readHandoffStateCounts(
+  db: D1Database,
+  workspaceId: string,
+): Promise<Record<HandoffState, number>> {
+  await requireWorkspace(db, workspaceId);
+  const cutoff = staleCutoff();
+  const { results } = await db
+    .prepare(
+      `SELECT h.status, h.created_at, t.status AS task_status, ${HAS_NEWER_HANDOFF} AS has_newer
+         FROM handoffs h JOIN tasks t ON t.id = h.task_id
+        WHERE t.workspace_id = ?1`,
+    )
+    .bind(workspaceId)
+    .all<HandoffStateFacts>();
+
+  const counts = { waiting: 0, stale: 0, accepted: 0, superseded: 0, obsolete: 0 };
+  for (const row of results) counts[handoffState(row, cutoff)] += 1;
+  return counts;
 }
 
 export async function readDecisions(
