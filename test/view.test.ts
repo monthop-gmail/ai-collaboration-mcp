@@ -701,3 +701,84 @@ describe("commit ที่ deployment รันอยู่", () => {
     expect(html).toContain("ไม่ทราบ");
   });
 });
+
+/**
+ * หน้านี้เคยตัดก่อนกรอง — ของที่ค้างและ **เก่าที่สุด** จึงหายไปก่อนใคร
+ *
+ * 30 ก.ย. 2026 เจ้าของงานทักว่าหัวหน้าจอขึ้น "2 handoff รอคนรับ" แต่กดเข้าไปแล้วว่าง
+ * เหตุคือตัวนับกับรายการมาจากคนละชุดข้อมูล — ตัวนับเป็น `COUNT(*)` ใน SQL แบบไม่จำกัด
+ * ส่วนรายการอ่านมาแค่ `ITEM_LIMIT` แถวล่าสุดแล้วค่อยกรองใน TS
+ *
+ * ของจริงตอนนั้น: `ws-001` มี handoff 264 ใบ และสองใบที่ยังต้องรับอยู่อันดับ 244 กับ 249
+ * จึงไม่เคยถูกอ่านเข้ามาเลย · งานที่ยังไม่ปิดอีก 7 ใบจาก 27 ก็หายไปด้วยเหตุเดียวกัน
+ *
+ * **มันกลับหัว** — ยิ่งใบรอนาน ยิ่งรับประกันว่าจะมองไม่เห็น ซึ่งตรงข้ามกับเหตุผลที่
+ * หน้านี้มีอยู่ · เทสต์นี้จึงวาง "ใบที่ต้องรับ" ไว้เก่าที่สุด แล้วถมของที่ไม่ต้องรับทับ
+ * ให้เกินเพดาน
+ */
+describe("ของที่ค้างต้องไม่หายเพราะชนเพดาน", () => {
+  /** เกิน ITEM_LIMIT (200) พอให้ใบที่เก่าที่สุดหลุดหน้าต่าง */
+  const FILLER = 205;
+
+  it("ใบที่ยังต้องรับและเก่ากว่าเพดาน ต้องยังขึ้นในรายการ", async () => {
+    // ใบจริงที่ต้องรับ — สร้างก่อนใคร จึงเก่าที่สุด
+    const live = await createTask(env.DB, WS, "งานที่ยังค้างจริง", "", chatgpt);
+    const wanted = await createHandoff(env.DB, live.id, "Claude", "ของจริง", chatgpt);
+
+    // ถมใบที่ไม่ต้องรับแล้วให้เกินเพดาน — ทุกใบชี้งานที่ปิดแล้ว จึงเป็น obsolete
+    const dead = await createTask(env.DB, WS, "งานที่ปิดแล้ว", "", chatgpt);
+    await updateTask(env.DB, dead.id, chatgpt, { status: "done" });
+    // เขียนตรงเพื่อคุม `created_at` ให้ใหม่กว่าแน่นอน — เวลาใน Workers ไม่ขยับระหว่าง
+    // โค้ดที่รันติดกัน การสร้างผ่าน API จะได้เวลาเท่ากันหมดแล้วลำดับจะสุ่ม
+    await env.DB.batch(
+      Array.from({ length: FILLER }, (_, i) =>
+        env.DB.prepare(
+          `INSERT INTO handoffs (id, task_id, to_whom, context, status,
+                                 from_name, from_client, created_at)
+           VALUES (?1, ?2, 'Claude', 'ของที่ไม่ต้องรับแล้ว', 'pending', 'ChatGPT', 'c-chatgpt', ?3)`,
+        ).bind(`ho-filler-${i}`, dead.id, `2026-10-${String(i % 28 + 1).padStart(2, "0")}T00:00:00.000Z`),
+      ),
+    );
+
+    const res = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    // กรณีบวก — ใบที่ต้องรับต้องอยู่ ทั้งที่เก่ากว่าของถม 205 ใบ
+    //
+    // ต้องเทียบกับ **แถวของส่วน Handoff โดยเฉพาะ** ไม่ใช่แค่ `toContain(id)` เฉย ๆ
+    // เพราะแถวของ "งาน" พิมพ์ `handoff ที่รออยู่: <id>` ด้วย · ตอนซ้อมถอดแพตช์ออก
+    // ข้อความยืนยันแบบหลวมผ่านทั้งที่ส่วน Handoff ว่างเปล่าจริง ๆ
+    expect(html).toContain(`<div class="muted">${wanted.handoff.id}</div>`);
+    expect(html).toContain("ของจริง");
+    // กรณีลบ — ของที่ไม่ต้องรับแล้วต้องไม่โผล่
+    expect(html).not.toContain("ho-filler-0");
+    // และต้องบอกว่าซ่อนไปเท่าไร ไม่ใช่ซ่อนเงียบ
+    expect(html).toContain(`ซ่อน ${FILLER} รายการ`);
+  });
+
+  it("งานที่ยังไม่ปิดและเก่ากว่าเพดาน ต้องยังขึ้นในรายการ", async () => {
+    const live = await createTask(env.DB, WS, "งานเก่าที่ยังเปิดอยู่", "", chatgpt);
+
+    await env.DB.batch(
+      Array.from({ length: FILLER }, (_, i) =>
+        env.DB.prepare(
+          `INSERT INTO tasks (id, workspace_id, title, status, created_by, created_by_client,
+                              created_at, updated_by, updated_at)
+           VALUES (?1, ?2, 'งานที่ปิดแล้ว', 'done', 'ChatGPT', 'c-chatgpt', ?3, 'ChatGPT', ?3)`,
+        ).bind(`task-filler-${i}`, WS, `2026-10-${String(i % 28 + 1).padStart(2, "0")}T00:00:00.000Z`),
+      ),
+    );
+
+    const res = await handleView(
+      get("/view/items", { cookie: `collab_view=${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    const html = await res!.text();
+
+    expect(html).toContain(live.id);
+    expect(html).not.toContain("task-filler-0");
+  });
+});

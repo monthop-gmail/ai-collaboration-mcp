@@ -15,8 +15,8 @@
 
 import { readMessages, readWorkspaceContext, getDiscussion } from "./db";
 import {
-  ACTIONABLE_HANDOFF_STATES,
   readDecisions,
+  readItemTotals,
   readHandoffs,
   readOpenItems,
   readStandingRuleDetails,
@@ -356,48 +356,46 @@ function hiddenNote(
   return `<div class="muted">ซ่อน ${count} รายการ${reason} · <a href="${href}">ดูทั้งหมด</a></div>`;
 }
 
+/**
+ * บอกเมื่อชนเพดาน แทนที่จะตัดเงียบ
+ *
+ * ต่อให้กรองใน SQL แล้ว ของที่ค้างก็ยังมากเกิน `ITEM_LIMIT` ได้ในวันหนึ่ง · การตัดที่
+ * ไม่มีสัญญาณอ่านได้ว่า "ครบแล้ว" ซึ่งเป็นความล้มเหลวรูปเดียวกับที่หน้านี้เพิ่งเจอมา
+ */
+function truncatedNote(page: { rows: unknown[]; total: number }, label: string): string {
+  if (page.rows.length >= page.total) return "";
+  return ` · <b>แสดง ${label} แค่ ${page.rows.length} จาก ${page.total}</b>`;
+}
+
 async function renderItems(
   env: Env,
   workspace: string,
   showAll: boolean,
 ): Promise<Response> {
-  const [allDecisions, allHandoffs, allTasks] = await Promise.all([
-    readDecisions(env.DB, workspace, ITEM_LIMIT),
-    readHandoffs(env.DB, workspace, ITEM_LIMIT, {}),
-    readTasks(env.DB, workspace, ITEM_LIMIT),
+  // **กรองใน SQL ไม่ใช่หลังอ่านมาแล้ว**
+  //
+  // เดิมอ่าน ITEM_LIMIT แถวล่าสุดของทุกชนิดมาก่อน แล้วค่อยกรองใน TS · พอของสะสมเกิน
+  // ITEM_LIMIT ของที่ยังค้างซึ่ง **เก่ากว่า** หน้าต่างนั้นจะไม่ถูกอ่านเข้ามาเลย ขณะที่
+  // ตัวนับบนหัวหน้าจอนับจาก SQL แบบไม่จำกัด — สองตัวจึงตอบคนละอย่าง
+  //
+  // 30 ก.ย. เจอของจริง: หัวหน้าจอบอก "2 handoff รอคนรับ" แต่รายการว่าง เพราะสองใบนั้น
+  // อยู่อันดับ 244 และ 249 จาก 264 ใบ · และงานที่ยังไม่ปิดอีก 7 ใบจาก 27 ก็หายไปด้วย
+  //
+  // **มันกลับหัว** — ใบที่รอนานที่สุดคือใบที่รับประกันว่าจะมองไม่เห็น ซึ่งตรงข้ามกับ
+  // เหตุผลที่หน้านี้มีอยู่
+  const [totals, decisions, handoffs, tasks] = await Promise.all([
+    readItemTotals(env.DB, workspace),
+    readDecisions(env.DB, workspace, ITEM_LIMIT, showAll ? undefined : "proposed"),
+    readHandoffs(env.DB, workspace, ITEM_LIMIT, showAll ? {} : { actionable: true }),
+    readTasks(env.DB, workspace, ITEM_LIMIT, showAll ? {} : { exclude_done: true }),
   ]);
 
-  // "ค้าง" ของแต่ละชนิดไม่เหมือนกัน — decision คือยังไม่มีใครเคาะ handoff คือยังไม่มีใคร
-  // รับ (รวมใบที่ตกยุคซึ่งค้างอยู่จริงแม้ไม่ต้องรับ) ส่วน task คือยังไม่ done
-  const decisions = {
-    ...allDecisions,
-    rows: showAll
-      ? allDecisions.rows
-      : allDecisions.rows.filter((d) => d.status === "proposed"),
-  };
-  // กรองด้วย `state` ที่คำนวณสด ไม่ใช่ `status` ในฐาน
-  //
-  // `obsolete` กับ `superseded` มี `status = 'pending'` ในฐานข้อมูลอยู่ดี เพราะไม่มีใคร
-  // ไปกด accept — ใบพวกนี้จึงลอดตัวกรองเดิมมาทั้งหมด และสะสมจนกลบใบที่ยังต้องรับจริง
-  // (20 ใบ ต่อ 2 ใบที่ยังรอคนรับ ตอนที่เจ้าของงานทัก)
-  //
-  // ใช้ `ACTIONABLE_HANDOFF_STATES` ที่ประกาศไว้แล้ว แทนการเขียนรายการใหม่ที่นี่ —
-  // ถ้าวันหนึ่งมีสถานะใหม่ ที่นี่กับที่อื่นจะไม่เพี้ยนจากกัน
-  const handoffs = {
-    ...allHandoffs,
-    rows: showAll
-      ? allHandoffs.rows
-      : allHandoffs.rows.filter((h) => ACTIONABLE_HANDOFF_STATES.includes(h.state)),
-  };
-  const tasks = {
-    ...allTasks,
-    rows: showAll ? allTasks.rows : allTasks.rows.filter((t) => t.status !== "done"),
-  };
-
+  // จำนวนที่ซ่อนคิดจาก **ยอดทั้งหมดในฐาน** ลบยอดที่ตรงตัวกรอง ไม่ใช่จากจำนวนแถวที่
+  // อ่านมาได้ — ไม่งั้นพอชนเพดานแล้วตัวเลขนี้จะโกหกตามไปด้วย
   const hidden = {
-    decisions: allDecisions.rows.length - decisions.rows.length,
-    handoffs: allHandoffs.rows.length - handoffs.rows.length,
-    tasks: allTasks.rows.length - tasks.rows.length,
+    decisions: totals.decisions - decisions.total,
+    handoffs: totals.handoffs - handoffs.total,
+    tasks: totals.tasks - tasks.total,
   };
 
   const decisionRows = decisions.rows
@@ -456,8 +454,11 @@ async function renderItems(
     `${showAll ? "ของทั้งหมด" : "ของที่ค้าง"} — ${workspace}`,
     `<div class="top"><h1>${showAll ? "ของทั้งหมด" : "ของที่ค้าง"}ใน ${esc(workspace)}</h1>` +
       `<a class="muted" href="${back}">← กลับ</a></div>` +
-      `<div class="muted">ทั้ง workspace มี decision ${allDecisions.total} · ` +
-      `handoff ${allHandoffs.total} · งาน ${allTasks.total}` +
+      `<div class="muted">ทั้ง workspace มี decision ${totals.decisions} · ` +
+      `handoff ${totals.handoffs} · งาน ${totals.tasks}` +
+      truncatedNote(decisions, "decision") +
+      truncatedNote(handoffs, "handoff") +
+      truncatedNote(tasks, "งาน") +
       (showAll ? ` · <a href="${onlyOpen}">แสดงเฉพาะที่ค้าง</a>` : "") +
       `</div>` +
       `<h2 class="section" id="decisions">Decision</h2>` +

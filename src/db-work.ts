@@ -192,6 +192,14 @@ const HAS_NEWER_HANDOFF = `EXISTS (
           AND (n.created_at > h.created_at
                OR (n.created_at = h.created_at AND n.rowid > h.rowid)))`;
 
+/**
+ * handoff ที่ไม่ต้องให้ใครรับแล้ว — งานปลายทางปิดไปแล้ว หรือมีใบใหม่กว่าบนงานเดียวกัน
+ *
+ * เคยเขียนซ้ำสามที่ (ตัวนับบนหัวหน้าจอ · `health` · ตัวกรองของ `/view`) แล้วเพี้ยนจากกัน
+ * จนหัวหน้าจอบอกว่ามีใบรออยู่ แต่รายการข้างล่างว่าง · ใช้ alias `t` ของตาราง tasks
+ */
+const INACTIVE_HANDOFF = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -320,6 +328,38 @@ async function paginate<T>(
     rows: hasMore ? results.slice(0, limit) : results,
     has_more: hasMore,
     total: total?.n ?? results.length,
+  };
+}
+
+/**
+ * ยอดทั้งหมดของแต่ละชนิดใน workspace — ไว้บอกว่าหน้าจอซ่อนอะไรไปเท่าไร
+ *
+ * ต้องนับจากฐานแบบไม่จำกัด ไม่ใช่จากจำนวนแถวที่อ่านมาได้ เพราะถ้าชนเพดานเมื่อไร
+ * ตัวเลข "ซ่อนไปกี่รายการ" จะโกหกตามไปด้วย
+ *
+ * สามท่อน ห่างจากเพดาน UNION ของ D1 (หกท่อน) พอสมควร
+ */
+export async function readItemTotals(
+  db: D1Database,
+  workspaceId: string,
+): Promise<{ decisions: number; handoffs: number; tasks: number }> {
+  await requireWorkspace(db, workspaceId);
+  const { results } = await db
+    .prepare(
+      `SELECT 'decisions' AS k, COUNT(*) AS n FROM decisions WHERE workspace_id = ?1
+       UNION ALL
+       SELECT 'handoffs', COUNT(*)
+         FROM handoffs h JOIN tasks t ON t.id = h.task_id WHERE t.workspace_id = ?1
+       UNION ALL
+       SELECT 'tasks', COUNT(*) FROM tasks WHERE workspace_id = ?1`,
+    )
+    .bind(workspaceId)
+    .all<{ k: string; n: number }>();
+  const by = new Map(results.map((r) => [r.k, r.n]));
+  return {
+    decisions: by.get("decisions") ?? 0,
+    handoffs: by.get("handoffs") ?? 0,
+    tasks: by.get("tasks") ?? 0,
   };
 }
 
@@ -456,7 +496,12 @@ export async function readTasks(
   db: D1Database,
   workspaceId: string,
   limit: number,
-  filters: { status?: TaskStatus; assigned_to?: string } = {},
+  filters: {
+    status?: TaskStatus;
+    assigned_to?: string;
+    /** ตัดงานที่ปิดแล้วออกตั้งแต่ใน SQL — กรองหลัง LIMIT จะทำให้ใบเก่าที่ยังค้างหายไป */
+    exclude_done?: boolean;
+  } = {},
 ): Promise<Page<TaskWithHandoff>> {
   await requireWorkspace(db, workspaceId);
 
@@ -471,6 +516,8 @@ export async function readTasks(
     params.push(filters.assigned_to);
     clauses.push(`t.assigned_to = ?${params.length}`);
   }
+
+  if (filters.exclude_done) clauses.push(`t.status <> 'done'`);
 
   const where = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
 
@@ -572,7 +619,13 @@ export async function readHandoffs(
   db: D1Database,
   workspaceId: string,
   limit: number,
-  filters: { task_id?: string; to_whom?: string; status?: "pending" | "accepted" } = {},
+  filters: {
+    task_id?: string;
+    to_whom?: string;
+    status?: "pending" | "accepted";
+    /** เอาเฉพาะใบที่ยังต้องมีคนรับจริง — ต้องกรองใน SQL ไม่ใช่หลังตัดด้วย LIMIT */
+    actionable?: boolean;
+  } = {},
 ): Promise<Page<HandoffRow>> {
   await requireWorkspace(db, workspaceId);
 
@@ -587,6 +640,11 @@ export async function readHandoffs(
     if (value === undefined) continue;
     params.push(value);
     clauses.push(`h.${column} = ?${params.length}`);
+  }
+
+  if (filters.actionable) {
+    clauses.push(`h.status = 'pending'`);
+    clauses.push(`NOT ${INACTIVE_HANDOFF}`);
   }
 
   const where = ` WHERE ${clauses.join(" AND ")}`;
@@ -1253,7 +1311,7 @@ export async function readWorkspaceHealth(
   workspaceId: string,
 ): Promise<WorkspaceHealth> {
   const cutoff = staleCutoff();
-  const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
+  const inactive = INACTIVE_HANDOFF;
 
   const [ages, delegatedHandoffs, delegatedTasks, openTasks, stalled, targets, ...actorRows] =
     await db.batch([
@@ -1411,7 +1469,7 @@ export async function readOpenItems(
   myName: string,
 ): Promise<OpenItems> {
   const cutoff = staleCutoff();
-  const inactive = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
+  const inactive = INACTIVE_HANDOFF;
 
   const [[counts, taskCounts, plan, myHandoffs, myTasks], health] = await Promise.all([
     db.batch([
