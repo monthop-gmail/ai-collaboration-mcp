@@ -16,11 +16,22 @@ REPO="$PWD"
 DB="ai-collab"
 OUT="${1:-}"
 
-# ชื่อที่ต้องออกโทเคนให้ · แก้ตรงนี้ถ้ารายชื่อเปลี่ยน
-ROLES=(
-  "lab/baseline" "lab/langgraph" "lab/crewai" "lab/msaf" "lab/ceiling"
-  "audit/lead" "audit/evidence" "audit/reviewer"
-)
+# ชื่อที่ต้องออกโทเคนให้
+#
+# ค่าตั้งต้นเป็นรอบของ Multi-Agent Lab กับ audit · รอบอื่นให้ override ทาง env
+# แทนการแก้ไฟล์ เพราะรายชื่อที่ยัดรวมกันหลายรอบจะทำให้ไม่รู้ว่าใบไหนของรอบไหน
+#
+#   COLLAB_ROLES="bot/herdr bot/opencode bot/codex" ./scripts/prepare-provisioning.sh ~/bot-tokens.txt
+#
+# รับทั้งเว้นวรรคและคอมมา
+if [ -n "${COLLAB_ROLES:-}" ]; then
+  IFS=', ' read -r -a ROLES <<< "$COLLAB_ROLES"
+else
+  ROLES=(
+    "lab/baseline" "lab/langgraph" "lab/crewai" "lab/msaf" "lab/ceiling"
+    "audit/lead" "audit/evidence" "audit/reviewer"
+  )
+fi
 
 # workspace ที่แต่ละรอบต้องใช้ · หนึ่งใบต่อหนึ่งรอบวัด ห้ามใช้ซ้ำ
 WORKSPACES=(
