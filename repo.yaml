@@ -26,5 +26,3 @@ knowledge_files:
 last_reviewed: 2026-10-09
 review_interval_days: 90
 ws001: [dis-fa078bf8]          # knowledge-standard pilot thread; other related ids TBD by the owner
-# Related (likely copies, unverified): monthop/ai-collaboration-mcp-test2, monthop/myteam-ai-collaboration-mcp
-# (same README size, 56,584 bytes, as of the 2026-10-09 survey).
