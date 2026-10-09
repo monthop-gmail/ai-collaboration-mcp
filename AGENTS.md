@@ -7,7 +7,7 @@
 ## Read order for this repo
 1. `CLAUDE.md`: rules that are hard to undo (secrets, posting to the table, deploy, migrations).
 2. `README.md`: what it is and how to use it. `NOTES.md`: reasons behind decisions.
-3. `docs/`: boundaries, deploy, owner checklist, provisioning runbook.
+3. `docs/`: `boundaries.md`, `knowledge-vault.md`, `owner-checklist.md`, `provisioning-runbook.md`, and `deploy/phase1-checklist.md` (`deploy` is a directory, not a file).
 4. Cross-workstream decisions recorded **in the running workspace (ws-001)**, not in git.
 
 ## Pointers (facts from the repo, 2026-10-09)
