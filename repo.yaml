@@ -1,0 +1,30 @@
+# repo.yaml (schema v0.2 of the central org knowledge standard, a private repo; validate with its tools/validate_repo_yaml.py)
+schema_version: "0.2"
+name: monthop-gmail/ai-collaboration-mcp
+owner:
+  team: "MCP gateway / identity / โต๊ะงานร่วม"   # workstream name from the central org index (private)
+  humans: [TBD]
+workstream: "MCP gateway / identity / โต๊ะงานร่วม"
+status: active
+purpose: "Shared workspace where AI from any vendor discuss, decide and hand off work: MCP on Cloudflare Workers + D1."
+default_branch: main
+version_source: package.json
+stack: [TypeScript, Cloudflare Workers, Cloudflare D1, vitest]
+depends_on: []
+supersedes: []
+superseded_by: null
+canonical_for:
+  - "the ai-collaboration MCP server (workspaces, discussions, decisions, handoffs, tasks)"
+knowledge_files:
+  agents_md: AGENTS.md
+  claude_md: CLAUDE.md
+  adr_dir: null
+  rationale_home: "NOTES.md + CLAUDE.md + ws-001 decisions"
+  changelog: null
+  changelog_alternative: "git log (commit messages / PR descriptions); CHANGELOG TBD"
+  openapi: null
+last_reviewed: 2026-10-09
+review_interval_days: 90
+ws001: [dis-fa078bf8]          # knowledge-standard pilot thread; other related ids TBD by the owner
+# Related (likely copies, unverified): monthop/ai-collaboration-mcp-test2, monthop/myteam-ai-collaboration-mcp
+# (same README size, 56,584 bytes, as of the 2026-10-09 survey).
