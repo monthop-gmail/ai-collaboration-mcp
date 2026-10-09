@@ -10,6 +10,11 @@ purpose: "Shared workspace where AI from any vendor discuss, decide and hand off
 default_branch: main
 version_source: package.json
 stack: [TypeScript, Cloudflare Workers, Cloudflare D1, vitest]
+# ว่างอยู่ **เพราะยังตัดสินไม่ได้ ไม่ใช่เพราะไม่มี** — repo นี้พึ่ง gateway ภายในหนึ่งตัว
+# ผ่าน GATEWAY_JWKS ที่ฝังเป็นค่าคงที่ (jwks_pinned_not_fetched) การหมุนกุญแจจึงต้อง
+# ประสานสองฝ่าย · ชื่อของมันเป็น repo private และ §7 ของกติกากลางยังรอการตัดสินว่า
+# ห้าม "ชื่อ" หรือห้าม "เนื้อ" (dis-fa078bf8 seq 23 เสนอแบบสองชั้น ยังไม่เคาะ)
+# เติมชื่อทันทีที่ §7 ถูกเคาะ · ดู src/jwt.ts สำหรับ sha ของสัญญาที่โค้ดนี้ทำตาม
 depends_on: []
 supersedes: []
 superseded_by: null
@@ -25,4 +30,6 @@ knowledge_files:
   openapi: null
 last_reviewed: 2026-10-09
 review_interval_days: 90
-ws001: [dis-fa078bf8]          # knowledge-standard pilot thread; other related ids TBD by the owner
+# กติกาของโต๊ะสองใบที่ผูก repo นี้อยู่จริง (scope=workspace, approved, ไม่ถูกแทน)
+# ตรวจได้จาก get_workspace_context.standing_rules
+ws001: [dis-fa078bf8, dec-9850cb54, dec-3bcb49a6]
