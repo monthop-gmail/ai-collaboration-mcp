@@ -27,7 +27,7 @@
 
 // ตารางกลไกอยู่ที่ `identity.ts` ที่เดียวกับโค้ดที่สร้างรหัส client — ถ้าถือสำเนา
 // ไว้ที่นี่ วันที่มีคนเพิ่มชนิดใหม่ ฝั่งนี้จะเดาผิดโดยไม่มีอะไรฟ้อง ซึ่งเกิดมาแล้ว
-import { mechanismOfClient, type Mechanism } from "./identity";
+import { STATIC_BEARER_CLIENT, mechanismOfClient, type Mechanism } from "./identity";
 /** กลไกที่ชื่อนี้เข้ามา — อ่านจาก `author_client` ตรง ๆ ไม่ได้ตีความเพิ่ม */
 export interface ObservedClient {
   /** ค่าที่ server บันทึกไว้จริง ไม่ใช่ของที่ผู้เรียกส่งมาเอง */
@@ -79,10 +79,20 @@ export interface UnresolvedClient {
   client: string;
   /** ชื่อที่ถูกบันทึกไป ซึ่งมาจากค่าสำรอง **ไม่ใช่จากผู้เรียก** */
   recorded_as: string;
+  /**
+   * จำนวน **ข้อความ** เท่านั้น — คงความหมายเดิมของคีย์นี้ไว้
+   *
+   * รุ่นแรกมีแต่คีย์นี้ และนั่นคือข้อบกพร่อง เพราะมันอ่านได้ว่าเป็นยอดรวม ·
+   * ยอดรวมทุกชนิดอยู่ที่ `records` (`dis-3b5cb137` seq 59)
+   */
   messages: number;
+  /** ร่องรอยทุกชนิดที่บันทึกรหัสกุญแจไว้ — ยอดที่ควรอ่านเมื่ออยากรู้ว่าแตะอะไรไปเท่าไร */
+  records: number;
+  /** แยกตามชนิด เช่น `messages`, `tasks_created`, `handoffs_accepted` */
+  by_kind: Record<string, number>;
   first_seen: string;
   last_seen: string;
-  /** กระทู้ที่ข้อความเหล่านั้นอยู่ — เบาะแสให้คนไปไล่ ไม่ใช่คำตอบว่าใคร */
+  /** กระทู้ที่ร่องรอยเหล่านั้นผูกอยู่ — เบาะแสให้คนไปไล่ ไม่ใช่คำตอบว่าใคร */
   discussion_hints: string[];
 }
 
@@ -93,7 +103,20 @@ export interface ParticipantReport {
    *
    * ว่างเปล่าคือดี · ไม่ว่างแปลว่ามี runtime ที่โพสต์ลงโต๊ะในชื่อที่ตัวเองไม่ได้ตั้ง
    */
-  unresolved_attribution: { clients: UnresolvedClient[]; total: number; note: string };
+  unresolved_attribution: {
+    clients: UnresolvedClient[];
+    /** ร่องรอยทุกชนิดรวมกัน ไม่ใช่จำนวนข้อความ */
+    total: number;
+    note: string;
+    /**
+     * ข้อจำกัดของ **ช่องนี้** อยู่ในช่องนี้ ไม่ใช่ไปรวมกับของทั้งรายงาน
+     *
+     * 10 ต.ค. 2026 Codex ยิงเส้นที่ไม่ประกาศชื่อ 5 ครั้งแล้วเครื่องมือนี้ไม่เห็นเลย
+     * เพราะทั้ง 5 ครั้งเป็นการอ่าน · ตอนนั้นข้อจำกัดนี้ไม่ได้เขียนอยู่ที่ไหนในผลลัพธ์
+     * `2` จึงอ่านได้ว่า "ทั้งหมดมี 2" แทนที่จะเป็น "มี 2 ในชนิดที่ฉันนับได้"
+     */
+    limitations: string[];
+  };
   /**
    * ข้อจำกัดเขียนไว้ในผลลัพธ์ ไม่ใช่ในเอกสารข้างนอก
    *
@@ -108,12 +131,13 @@ const UNRESOLVED_NOTE =
   "ไม่ใช่จากผู้เรียก · แก้ที่ฝั่งผู้เรียกด้วยการส่ง X-Client-Name ของตัวเอง " +
   "แล้วยืนยันด้วย you_are ก่อนรับงาน · ห้ามเดาว่าแถวไหนคือใคร";
 
-const UNRESOLVED_SQL = `SELECT m.author_name AS recorded_as, COUNT(*) AS n,
-                               MIN(m.created_at) AS first_seen, MAX(m.created_at) AS last_seen,
-                               group_concat(DISTINCT m.discussion_id) AS hints
-                          FROM messages m JOIN discussions d ON d.id = m.discussion_id
-                         WHERE d.workspace_id = ?1 AND m.author_client = 'static-bearer'
-                         GROUP BY m.author_name`;
+/** ข้อจำกัดของช่อง `unresolved_attribution` — อยู่ติดกับตัวเลขที่มันจำกัด */
+const UNRESOLVED_LIMITATIONS = [
+  "เห็นเฉพาะผู้เรียกที่ **สร้างระเบียน** — ผู้เรียกที่แค่อ่าน ไม่เคยปรากฏที่นี่ ไม่ว่าจะอ่านกี่ครั้ง ว่างเปล่าจึงไม่ได้แปลว่าไม่มีใครเข้ามาแบบไม่ประกาศชื่อ",
+  "นับจากคอลัมน์ที่เก็บรหัสกุญแจเท่านั้น — การแก้ใบงานและการเปิดกระทู้ไม่ได้เก็บรหัส ร่องรอยสองชนิดนั้นจึงนับไม่ได้แม้มาจากเส้นนี้",
+  "first_seen กับ last_seen เป็นช่วงของร่องรอยที่นับได้ ไม่ใช่ช่วงที่ผู้เรียกนั้นเข้ามาจริง — การอ่านอยู่นอกช่วงนี้ได้",
+  "ชื่อใน recorded_as เป็นค่าสำรองที่ตั้งไว้ ณ เวลานั้น — เปลี่ยนค่าสำรองแล้วระเบียนเก่าไม่เปลี่ยนตาม ชื่อต่างกันจึงเป็นคนละช่วงเวลา ไม่ใช่คนละผู้เรียก",
+] as const;
 
 /** เพดานของเบาะแส — รายการยาวไม่ได้ช่วยไล่ และบอกเสมอว่าตัดไปเท่าไร */
 const HINT_LIMIT = 10;
@@ -131,9 +155,10 @@ interface Row {
   name: string | null;
   client?: string | null;
   n: number;
-  /** มีเฉพาะคิวรีของ `messages` — คิวรีของ `acted` ไม่ได้ขอค่านี้ */
   first_seen?: string | null;
   last_seen: string | null;
+  /** รหัสกระทู้ที่เกี่ยวข้อง คั่นด้วย comma · `NULL` เมื่อแหล่งนั้นไม่ได้ผูกกับกระทู้ */
+  hints?: string | null;
 }
 
 /** แต่ละคิวรีสั้นโดยตั้งใจ — D1 จำกัดจำนวนท่อนใน compound SELECT ไว้ต่ำกว่าที่คาด */
@@ -141,7 +166,9 @@ const ACTED_QUERIES: Array<{ kind: string; sql: string }> = [
   {
     kind: "handoffs_accepted",
     sql: `SELECT h.accepted_by AS name, h.accepted_client AS client,
-                 COUNT(*) AS n, MAX(h.accepted_at) AS last_seen
+                 COUNT(*) AS n, MIN(h.accepted_at) AS first_seen,
+                 MAX(h.accepted_at) AS last_seen,
+                 group_concat(DISTINCT t.discussion_id) AS hints
             FROM handoffs h JOIN tasks t ON t.id = h.task_id
            WHERE t.workspace_id = ?1 AND h.accepted_by IS NOT NULL
            GROUP BY h.accepted_by, h.accepted_client`,
@@ -149,48 +176,85 @@ const ACTED_QUERIES: Array<{ kind: string; sql: string }> = [
   {
     kind: "tasks_created",
     sql: `SELECT created_by AS name, created_by_client AS client,
-                 COUNT(*) AS n, MAX(created_at) AS last_seen
+                 COUNT(*) AS n, MIN(created_at) AS first_seen,
+                 MAX(created_at) AS last_seen,
+                 group_concat(DISTINCT discussion_id) AS hints
             FROM tasks WHERE workspace_id = ?1 GROUP BY created_by, created_by_client`,
   },
   {
     kind: "tasks_updated",
     sql: `SELECT updated_by AS name, NULL AS client,
-                 COUNT(*) AS n, MAX(updated_at) AS last_seen
+                 COUNT(*) AS n, MIN(updated_at) AS first_seen,
+                 MAX(updated_at) AS last_seen, NULL AS hints
             FROM tasks WHERE workspace_id = ?1 AND updated_by IS NOT NULL GROUP BY updated_by`,
   },
   {
     kind: "discussions_created",
     sql: `SELECT created_by AS name, NULL AS client,
-                 COUNT(*) AS n, MAX(created_at) AS last_seen
+                 COUNT(*) AS n, MIN(created_at) AS first_seen,
+                 MAX(created_at) AS last_seen, group_concat(DISTINCT id) AS hints
             FROM discussions WHERE workspace_id = ?1 GROUP BY created_by`,
   },
   {
     kind: "decisions_proposed",
     sql: `SELECT proposed_by AS name, proposed_by_client AS client,
-                 COUNT(*) AS n, MAX(created_at) AS last_seen
+                 COUNT(*) AS n, MIN(created_at) AS first_seen,
+                 MAX(created_at) AS last_seen,
+                 group_concat(DISTINCT discussion_id) AS hints
             FROM decisions WHERE workspace_id = ?1 GROUP BY proposed_by, proposed_by_client`,
   },
   {
     kind: "decisions_decided",
     sql: `SELECT decided_by AS name, decided_by_client AS client,
-                 COUNT(*) AS n, MAX(decided_at) AS last_seen
+                 COUNT(*) AS n, MIN(decided_at) AS first_seen,
+                 MAX(decided_at) AS last_seen,
+                 group_concat(DISTINCT discussion_id) AS hints
             FROM decisions WHERE workspace_id = ?1 AND decided_by IS NOT NULL
            GROUP BY decided_by, decided_by_client`,
   },
   {
     kind: "plans_created",
     sql: `SELECT created_by AS name, created_by_client AS client,
-                 COUNT(*) AS n, MAX(created_at) AS last_seen
+                 COUNT(*) AS n, MIN(created_at) AS first_seen,
+                 MAX(created_at) AS last_seen,
+                 group_concat(DISTINCT discussion_id) AS hints
             FROM plans WHERE workspace_id = ?1 GROUP BY created_by, created_by_client`,
   },
 ];
 
 const SPOKE_SQL = `SELECT m.author_name AS name, m.author_client AS client,
                           COUNT(*) AS n, MIN(m.created_at) AS first_seen,
-                          MAX(m.created_at) AS last_seen
+                          MAX(m.created_at) AS last_seen,
+                          group_concat(DISTINCT m.discussion_id) AS hints
                      FROM messages m JOIN discussions d ON d.id = m.discussion_id
                     WHERE d.workspace_id = ?1
                     GROUP BY m.author_name, m.author_client`;
+
+/**
+ * ร่องรอยของผู้เรียกที่ไม่ประกาศชื่อ เก็บทีละชื่อที่ถูกบันทึก
+ *
+ * กินข้อมูลจาก **ผลชุดเดียวกับที่ `participants` ใช้** ไม่ได้ยิงคิวรีเพิ่ม — ถ้าแยกชุด
+ * จะมีนิยามว่า "ร่องรอยอยู่ที่ไหน" สองที่ แล้วมันจะเลื่อนออกจากกันเมื่อมีตารางใหม่
+ */
+class UnresolvedBucket {
+  messages = 0;
+  records = 0;
+  byKind: Record<string, number> = {};
+  first = "";
+  last = "";
+  hints = new Set<string>();
+
+  add(kind: string, row: Row): void {
+    this.records += row.n;
+    this.byKind[kind] = (this.byKind[kind] ?? 0) + row.n;
+    if (kind === "messages") this.messages += row.n;
+    if (row.first_seen && (!this.first || row.first_seen < this.first)) {
+      this.first = row.first_seen;
+    }
+    if (row.last_seen && (!this.last || row.last_seen > this.last)) this.last = row.last_seen;
+    for (const hint of (row.hints ?? "").split(",")) if (hint) this.hints.add(hint);
+  }
+}
 
 /** เก็บของทีละชื่อ โดยจับคู่แบบไม่สนตัวพิมพ์ — กติกาเดียวกับที่ `waiting_for_you` ใช้ */
 class Bucket {
@@ -248,6 +312,17 @@ export async function readParticipants(
   const [spoke, ...acted] = await db.batch(statements);
 
   const buckets = new Map<string, Bucket>();
+  const unresolvedBuckets = new Map<string, UnresolvedBucket>();
+  /** แถวที่กุญแจเป็น `static-bearer` คือแถวที่ผู้เรียกไม่ได้ประกาศชื่อ — จับจากกลไก ไม่ใช่จากชื่อ */
+  const collectUnresolved = (kind: string, row: Row): void => {
+    if (row.client !== STATIC_BEARER_CLIENT || !row.name) return;
+    let bucket = unresolvedBuckets.get(row.name);
+    if (!bucket) {
+      bucket = new UnresolvedBucket();
+      unresolvedBuckets.set(row.name, bucket);
+    }
+    bucket.add(kind, row);
+  };
   const bucketFor = (name: string): Bucket => {
     const key = name.toLowerCase();
     let bucket = buckets.get(key);
@@ -263,6 +338,7 @@ export async function readParticipants(
     const bucket = bucketFor(row.name);
     bucket.see(row.name, row.last_seen);
     bucket.addClient(row.client, row.last_seen, row.first_seen, row.n);
+    collectUnresolved("messages", row);
     bucket.spokeCount += row.n;
     if (row.last_seen && (!bucket.spokeLast || row.last_seen > bucket.spokeLast)) {
       bucket.spokeLast = row.last_seen;
@@ -275,7 +351,8 @@ export async function readParticipants(
       if (!row.name) continue;
       const bucket = bucketFor(row.name);
       bucket.see(row.name, row.last_seen);
-      bucket.addClient(row.client, row.last_seen);
+      bucket.addClient(row.client, row.last_seen, row.first_seen);
+      collectUnresolved(kind, row);
       bucket.actedKinds[kind] = (bucket.actedKinds[kind] ?? 0) + row.n;
       bucket.actedCount += row.n;
       if (row.last_seen && (!bucket.actedLast || row.last_seen > bucket.actedLast)) {
@@ -296,37 +373,34 @@ export async function readParticipants(
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const unresolvedRows = (
-    await db.prepare(UNRESOLVED_SQL).bind(workspaceId).all<{
-      recorded_as: string;
-      n: number;
-      first_seen: string;
-      last_seen: string;
-      hints: string | null;
-    }>()
-  ).results;
-
-  const unresolved: UnresolvedClient[] = unresolvedRows.map((row) => {
-    const all = (row.hints ?? "").split(",").filter(Boolean);
-    const shown = all.slice(0, HINT_LIMIT);
-    // ตัดแล้วบอก — การตัดเงียบอ่านได้ว่า "มีเท่านี้"
-    if (all.length > shown.length) shown.push(`(+${all.length - shown.length} กระทู้ที่ไม่ได้แสดง)`);
-    return {
-      client: "static-bearer",
-      recorded_as: row.recorded_as,
-      messages: row.n,
-      first_seen: row.first_seen,
-      last_seen: row.last_seen,
-      discussion_hints: shown,
-    };
-  });
+  const unresolved: UnresolvedClient[] = [...unresolvedBuckets.entries()]
+    .map(([recordedAs, bucket]) => {
+      const all = [...bucket.hints].sort();
+      const shown = all.slice(0, HINT_LIMIT);
+      // ตัดแล้วบอก — การตัดเงียบอ่านได้ว่า "มีเท่านี้"
+      if (all.length > shown.length) {
+        shown.push(`(+${all.length - shown.length} กระทู้ที่ไม่ได้แสดง)`);
+      }
+      return {
+        client: STATIC_BEARER_CLIENT,
+        recorded_as: recordedAs,
+        messages: bucket.messages,
+        records: bucket.records,
+        by_kind: bucket.byKind,
+        first_seen: bucket.first,
+        last_seen: bucket.last,
+        discussion_hints: shown,
+      };
+    })
+    .sort((a, b) => b.last_seen.localeCompare(a.last_seen));
 
   return {
     participants,
     unresolved_attribution: {
       clients: unresolved,
-      total: unresolved.reduce((sum, c) => sum + c.messages, 0),
+      total: unresolved.reduce((sum, c) => sum + c.records, 0),
       note: UNRESOLVED_NOTE,
+      limitations: [...UNRESOLVED_LIMITATIONS],
     },
     limitations: [...LIMITATIONS],
   };

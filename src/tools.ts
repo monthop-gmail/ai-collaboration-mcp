@@ -187,8 +187,12 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         "available, is trustworthy, or is one person. Read 'limitations' before " +
         "using any of it to decide where to send work. 'unresolved_attribution' " +
         "lists callers that got in but never declared who they are: the name on " +
-        "their records came from the server's fallback, not from them. An empty " +
-        "list is the healthy state.",
+        "their records came from the server's fallback, not from them. Read " +
+        "'records' for how much they touched and 'by_kind' for what, NOT " +
+        "'messages', which counts only messages and is kept for compatibility. " +
+        "It sees only callers that WROTE something: a caller that merely reads is " +
+        "never listed however often it connects, so an empty list does not mean " +
+        "nobody came in unnamed. Its own 'limitations' spell this out.",
       inputSchema: z.object({ workspace: Workspace }),
     },
     async ({ workspace }) =>

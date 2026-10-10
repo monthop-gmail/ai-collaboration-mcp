@@ -22,12 +22,15 @@ type Unresolved = {
     client: string;
     recorded_as: string;
     messages: number;
+    records: number;
+    by_kind: Record<string, number>;
     first_seen: string;
     last_seen: string;
     discussion_hints: string[];
   }>;
   total: number;
   note: string;
+  limitations: string[];
 };
 
 /**
@@ -184,12 +187,14 @@ describe("ของที่จงใจไม่มี", () => {
 
     expect("status" in u.clients[0]).toBe(false);
     expect(Object.keys(u.clients[0]).sort()).toEqual([
+      "by_kind",
       "client",
       "discussion_hints",
       "first_seen",
       "last_seen",
       "messages",
       "recorded_as",
+      "records",
     ]);
   });
 });
@@ -217,5 +222,85 @@ describe("clients ของแต่ละชื่อ บอกช่วงเ�
     ]);
     expect(teamA.clients[0].messages).toBe(2);
     expect(teamA.clients[0].first_seen as string).not.toBe("");
+  });
+});
+
+/**
+ * นับทุกร่องรอย ไม่ใช่แค่ข้อความ
+ *
+ * รุ่นแรกอ่านจากตาราง `messages` ตารางเดียว · ใน `ws-001` เส้นนี้แตะของไว้ 4 ชิ้น
+ * แต่รายงานบอก 2 และ **ไม่ได้บอกว่ามันนับแค่ข้อความ** — `2` จึงอ่านได้ว่าเป็นยอดรวม
+ * (`dis-3b5cb137` seq 59)
+ */
+describe("ร่องรอยที่ไม่ใช่ข้อความ", () => {
+  /** **กรณีที่ตัดสิน** — ผู้เรียกที่ไม่ประกาศชื่อและ *ไม่เคยโพสต์อะไรเลย* */
+  it("ผู้เรียกที่สร้างแต่ใบงาน ไม่เคยโพสต์ ต้องยังโผล่ในรายการ", async () => {
+    await call(null, "create_task", { title: "ใบที่สร้างโดยคนไม่ประกาศชื่อ" }, "ค่าสำรอง");
+
+    const u = await unresolved("ค่าสำรอง");
+
+    expect(u.clients).toHaveLength(1);
+    // รุ่นแรกได้รายการว่าง เพราะไม่มีข้อความให้นับ
+    expect(u.clients[0].records).toBe(1);
+    expect(u.clients[0].messages).toBe(0);
+    expect(u.clients[0].by_kind).toEqual({ tasks_created: 1 });
+  });
+
+  it("แยกชนิดของร่องรอยให้ และ records เป็นยอดรวมของทุกชนิด", async () => {
+    const dis = (await call("owner/team-a", "create_discussion", { title: "คุยกัน" }))
+      .discussion_id as string;
+    await call(null, "post_message", { discussion_id: dis, body: "x" }, "ค่าสำรอง");
+    await call(null, "create_task", { title: "ใบหนึ่ง" }, "ค่าสำรอง");
+    await call(null, "create_task", { title: "ใบสอง" }, "ค่าสำรอง");
+
+    const row = (await unresolved("ค่าสำรอง")).clients[0];
+
+    expect(row.by_kind).toEqual({ messages: 1, tasks_created: 2 });
+    expect(row.records).toBe(3);
+    expect(row.messages).toBe(1);
+  });
+
+  it("total เป็นยอดร่องรอย ไม่ใช่ยอดข้อความ", async () => {
+    await call(null, "create_task", { title: "ใบเดียว" }, "ค่าสำรอง");
+
+    const u = await unresolved("ค่าสำรอง");
+
+    // รุ่นแรกจะได้ 0 เพราะบวกจาก messages
+    expect(u.total).toBe(1);
+  });
+
+  it("ช่วงเวลาครอบร่องรอยที่ไม่ใช่ข้อความด้วย", async () => {
+    const task = (await call(null, "create_task", { title: "ใบแรกสุด" }, "ค่าสำรอง"))
+      .task_id as string;
+    expect(task).toBeTruthy();
+
+    const row = (await unresolved("ค่าสำรอง")).clients[0];
+
+    // รุ่นแรกคืนค่าว่างเพราะไม่มีแถวข้อความ
+    expect(row.first_seen).toBeTruthy();
+    expect(row.last_seen).toBeTruthy();
+  });
+});
+
+describe("ข้อจำกัดต้องอยู่ติดกับตัวเลขที่มันจำกัด", () => {
+  /**
+   * ข้อที่สำคัญที่สุด — 10 ต.ค. Codex ยิงเส้นที่ไม่ประกาศชื่อ 5 ครั้งแล้วเครื่องมือนี้
+   * ไม่เห็นเลย เพราะทั้ง 5 ครั้งเป็นการอ่าน · ตอนนั้นข้อจำกัดนี้ไม่ได้อยู่ในผลลัพธ์
+   */
+  it("บอกว่าผู้เรียกที่แค่อ่านไม่เคยปรากฏ และรายการว่างไม่ได้แปลว่าไม่มีใคร", async () => {
+    const u = await unresolved();
+
+    expect(u.limitations.length).toBeGreaterThan(0);
+    expect(u.limitations.join(" ")).toContain("แค่อ่าน");
+    expect(u.limitations.join(" ")).toContain("ว่างเปล่า");
+  });
+
+  it("ข้อจำกัดติดมาแม้รายการไม่ว่าง ไม่ใช่โผล่เฉพาะตอนว่าง", async () => {
+    await call(null, "create_task", { title: "ใบหนึ่ง" }, "ค่าสำรอง");
+
+    const u = await unresolved("ค่าสำรอง");
+
+    expect(u.clients).toHaveLength(1);
+    expect(u.limitations.join(" ")).toContain("แค่อ่าน");
   });
 });
