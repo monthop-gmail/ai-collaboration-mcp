@@ -185,7 +185,10 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         "means the label covers more than one identity. These are observations, " +
         "NOT a judgement: you cannot conclude from this that a name exists, is " +
         "available, is trustworthy, or is one person. Read 'limitations' before " +
-        "using any of it to decide where to send work.",
+        "using any of it to decide where to send work. 'unresolved_attribution' " +
+        "lists callers that got in but never declared who they are: the name on " +
+        "their records came from the server's fallback, not from them. An empty " +
+        "list is the healthy state.",
       inputSchema: z.object({ workspace: Workspace }),
     },
     async ({ workspace }) =>
@@ -196,6 +199,9 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
           workspace,
           total: report.participants.length,
           participants: report.participants,
+          // ผู้เรียกที่เข้ามาได้แต่ไม่ได้ประกาศว่าเป็นใคร · ว่างเปล่าคือดี
+          // และ `note` ติดมาเสมอ เพื่อให้ความหมายมาถึงก่อนที่รายการจะไม่ว่าง
+          unresolved_attribution: report.unresolved_attribution,
           limitations: report.limitations,
         };
       }),
