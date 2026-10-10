@@ -26,6 +26,7 @@ import {
   type TaskStatus,
 } from "./db-work";
 import {
+  ActingContext,
   Limit,
   Workspace,
   actedAs,
@@ -182,6 +183,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           .string()
           .min(1)
           .describe("Why. Someone reading this next month needs it to make sense."),
+        acting_context: ActingContext,
         superseded_by: z
           .string()
           .optional()
@@ -202,7 +204,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           ),
       }),
     },
-    async ({ decision_id, verdict, reason, superseded_by, approval_code }) =>
+    async ({ decision_id, verdict, reason, superseded_by, approval_code, acting_context }) =>
       run(async () => {
         const { decision, announced } = await resolveDecision(
           env.DB,
@@ -212,6 +214,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           author(),
           { code: approval_code, secret: env.APPROVAL_SECRET },
           superseded_by,
+          acting_context,
         );
         return {
           decision_id: decision.id,
@@ -219,6 +222,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           decided_by: decision.decided_by,
           decided_by_kind: decision.decided_by_kind,
           superseded_by: decision.superseded_by,
+          // บริบทที่ประกาศตอนปิดใบ · คืนเสมอแม้เป็น null
+          acting_context: decision.acting_context,
           announced_in_discussion: announced,
           note:
             decision.decided_by_kind === "human"
@@ -379,6 +384,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
               "to leave the task with no owner.",
           ),
         detail: z.string().optional(),
+        acting_context: ActingContext,
         result_ref: z
           .string()
           .nullable()
@@ -390,13 +396,14 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           ),
       }),
     },
-    async ({ task_id, status, assigned_to, detail, result_ref }) =>
+    async ({ task_id, status, assigned_to, detail, result_ref, acting_context }) =>
       run(async () => {
         const task = await updateTask(env.DB, task_id, author(), {
           status: status as TaskStatus | undefined,
           assigned_to,
           detail,
           result_ref,
+          acting_context,
         });
         const crossTask = crossTaskWarning(
           task.title,
@@ -418,7 +425,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           status: task.status,
           assigned_to: task.assigned_to,
           updated_by: task.updated_by,
-          acted_as: actedAs(task.assigned_to, task.updated_by),
+          acted_as: actedAs(task.assigned_to, task.updated_by, task.acting_context),
           updated_at: task.updated_at,
           // คืนเสมอ แม้เป็น null — ผู้เรียกต้องแยก *ยังไม่มีใครบันทึกตัวชี้* ออกจาก
           // *ระบบไม่เก็บช่องนี้* ได้จากผลลัพธ์เดียว
@@ -569,11 +576,19 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         "Take on a handed-over task. Records you as the one who accepted it and " +
         "moves the task to 'in_progress'. You are identified by your connection, " +
         "so you cannot accept on someone else's behalf.",
-      inputSchema: z.object({ handoff_id: z.string().min(1) }),
+      inputSchema: z.object({
+        handoff_id: z.string().min(1),
+        acting_context: ActingContext,
+      }),
     },
-    async ({ handoff_id }) =>
+    async ({ handoff_id, acting_context }) =>
       run(async () => {
-        const { handoff, task } = await acceptHandoff(env.DB, handoff_id, author());
+        const { handoff, task } = await acceptHandoff(
+          env.DB,
+          handoff_id,
+          author(),
+          acting_context,
+        );
         return {
           handoff_id: handoff.id,
           accepted_by: handoff.accepted_by,
@@ -582,7 +597,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           task_title: task.title,
           task_status: task.status,
           task_assigned_to: task.assigned_to,
-          acted_as: actedAs(handoff.to_whom, handoff.accepted_by),
+          acted_as: actedAs(handoff.to_whom, handoff.accepted_by, handoff.acting_context),
         };
       }),
   );

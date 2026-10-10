@@ -123,7 +123,11 @@ CREATE TABLE IF NOT EXISTS decisions (
   -- บันทึกทั้งตอนปักและตอนถอด เพราะถ้าบันทึกเฉพาะตอนปัก แถวที่ถูกถอดจะค้างชื่อ
   -- คนปักไว้ทั้งที่มันไม่ใช่กติกาแล้ว ซึ่งชี้ผิดคนแย่กว่าไม่ชี้เลย
   scope_set_by    TEXT,
-  scope_set_at    TEXT
+  scope_set_at    TEXT,
+
+  -- บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนลงมือ · NULL = ไม่ได้ประกาศ
+  -- ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
+  acting_context  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_workspace
@@ -151,7 +155,10 @@ CREATE TABLE IF NOT EXISTS tasks (
 
   -- ตัวชี้ว่าผลอยู่ที่ไหน ไม่ใช่ที่เก็บผล · NULL แปลว่ายังไม่มีใครบันทึกตัวชี้
   -- ไม่ได้แปลว่าไม่มีผล (ไมเกรชัน 0005)
-  result_ref        TEXT
+  result_ref        TEXT,
+  -- บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนลงมือ · NULL = ไม่ได้ประกาศ
+  -- ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
+  acting_context    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace
@@ -176,7 +183,11 @@ CREATE TABLE IF NOT EXISTS handoffs (
 
   accepted_by     TEXT,
   accepted_client TEXT,
-  accepted_at     TEXT
+  accepted_at     TEXT,
+
+  -- บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนลงมือ · NULL = ไม่ได้ประกาศ
+  -- ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
+  acting_context  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_handoffs_task    ON handoffs (task_id, created_at);

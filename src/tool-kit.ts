@@ -232,6 +232,37 @@ export async function run(fn: () => Promise<unknown>) {
  * ไม่ได้เกิดขึ้น — หลักการเดียวกับการอ่าน record กลับมาหลังเขียน
  */
 /**
+ * บริบทที่ผู้เรียกประกาศว่ากำลังทำงานแทนใคร
+ *
+ * **ผู้เรียกประกาศเอง ตรวจไม่ได้ และไม่มีผลต่อตัวตนหรือสิทธิ์** — `resolveAuthor()`
+ * ไม่เคยอ่านมัน จึงเปลี่ยนชื่อผู้ลงมือไม่ได้โดยโครงสร้าง ไม่ใช่โดยกฎที่ต้องจำ
+ *
+ * เพดาน 200 ตัวอักษรเพราะช่องนี้มีไว้ตอบว่า *แทนใคร* ไม่ใช่ที่เขียนบันทึก —
+ * ของยาวควรไปอยู่ใน `detail` หรือ `reason` ที่มีไว้สำหรับนั้นแล้ว
+ */
+export const ActingContext = z
+  .string()
+  .max(200)
+  .optional()
+  .describe(
+    "Optional. The team/repo/runtime you are acting for or on behalf of in this call. " +
+      "Caller-declared context for the audit trail — it is NOT identity, is never verified, " +
+      "and cannot change who the server records as the actor. Omit it to keep current behaviour.",
+  );
+
+/**
+ * ตัดช่องว่าง · ว่างหลังตัดคือ **ไม่ได้ประกาศ** ไม่ใช่ประกาศว่าว่าง
+ *
+ * ไม่ปฏิเสธสตริงว่าง เพราะผู้เรียกที่ส่ง `""` มาจะเห็น `acting_context: null`
+ * กลับไปในผลลัพธ์เอง — บอกตัวเองได้โดยไม่ต้องทำให้คำขอล้มเหลว
+ */
+export function normalizeActingContext(value?: string | null): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
  * ใครลงมือ เทียบกับใครที่บันทึกระบุ
  *
  * โต๊ะนี้มีเคสจริงแล้วสี่ครั้งที่ผู้ลงมือไม่ใช่ผู้ที่ใบจ่าหน้าถึง — ใบที่ส่งถึงทีมหนึ่ง
@@ -248,10 +279,18 @@ export async function run(fn: () => Promise<unknown>) {
 export function actedAs(
   addressedTo: string | null | undefined,
   actedBy: string | null | undefined,
+  /**
+   * บริบทที่ผู้เรียกประกาศว่ากำลังทำงานแทนใคร — **ไม่ใช่การยืนยันตัวตน**
+   *
+   * อยู่ในก้อนเดียวกับ `delegated` โดยตั้งใจ เพราะมันคือคำอธิบายของช่องนั้น
+   * ไม่ใช่ข้อมูลคนละเรื่อง · ผู้อ่านที่เห็น `delegated: true` จะเห็นเจตนาในที่เดียวกัน
+   */
+  actingContext?: string | null,
 ): {
   addressed_to: string | null;
   acted_by: string | null;
   delegated: boolean;
+  acting_context: string | null;
   note?: string;
 } {
   const addressed =
@@ -266,6 +305,8 @@ export function actedAs(
     addressed_to: addressed,
     acted_by: actor,
     delegated,
+    // คืนเสมอแม้เป็น null — ผู้อ่านต้องแยก *ไม่ได้ประกาศ* ออกจาก *ระบบไม่เก็บช่องนี้*
+    acting_context: normalizeActingContext(actingContext),
     ...(delegated
       ? {
           note:
