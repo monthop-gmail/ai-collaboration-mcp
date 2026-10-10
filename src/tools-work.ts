@@ -574,8 +574,13 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     {
       description:
         "Take on a handed-over task. Records you as the one who accepted it and " +
-        "moves the task to 'in_progress'. You are identified by your connection, " +
-        "so you cannot accept on someone else's behalf.",
+        "moves the task to 'in_progress' — EXCEPT when the task is 'blocked', " +
+        "which is left as it is, because accepting a handoff says who is holding " +
+        "the task, not that the blocker is gone. Read 'task_status_source' to see " +
+        "which happened: 'accept' means this call moved it, 'unchanged' means it " +
+        "kept the status it already had, and you must call update_task yourself " +
+        "once the blocker is actually cleared. You are identified by your " +
+        "connection, so you cannot accept on someone else's behalf.",
       inputSchema: z.object({
         handoff_id: z.string().min(1),
         acting_context: ActingContext,
@@ -583,7 +588,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     },
     async ({ handoff_id, acting_context }) =>
       run(async () => {
-        const { handoff, task } = await acceptHandoff(
+        const { handoff, task, taskStatusKept } = await acceptHandoff(
           env.DB,
           handoff_id,
           author(),
@@ -596,6 +601,13 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           // เหตุผลเดียวกับ `update_task` — ผู้รับควรเห็นว่ารับใบไหนไว้ ไม่ใช่แค่รหัส
           task_title: task.title,
           task_status: task.status,
+          // มีเสมอทั้งสองกรณี — ผู้อ่านต้องแยก *การรับใบเลื่อนสถานะให้* ออกจาก
+          // *สถานะเดิมถูกเก็บไว้* ได้จากผลลัพธ์เดียว ไม่ใช่จากการเดาว่าทำไมยังเป็น blocked
+          task_status_source: taskStatusKept ? "unchanged" : "accept",
+          task_status_note: taskStatusKept
+            ? "ใบนี้เป็น blocked อยู่ การรับใบไม่เลื่อนสถานะให้ เพราะการรับบอกว่าใครถือ " +
+              "ไม่ใช่ว่าตัวที่บล็อกหายไปแล้ว — ปลดได้แล้วค่อยเรียก update_task เอง"
+            : "การรับใบเลื่อนสถานะเป็น in_progress ให้แล้ว",
           task_assigned_to: task.assigned_to,
           acted_as: actedAs(handoff.to_whom, handoff.accepted_by, handoff.acting_context),
         };
