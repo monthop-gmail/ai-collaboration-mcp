@@ -770,7 +770,7 @@ export async function acceptHandoff(
   handoffId: string,
   author: Author,
   actingContext?: string | null,
-): Promise<{ handoff: Handoff; task: Task }> {
+): Promise<{ handoff: Handoff; task: Task; taskStatusKept: boolean }> {
   const existing = await db
     .prepare(
       `SELECT h.*, t.status AS task_status, ${HAS_NEWER_HANDOFF} AS has_newer
@@ -815,8 +815,16 @@ export async function acceptHandoff(
 
   // **ไม่เขียน acting_context ลงใบงานด้วย** — บริบทเป็นของ *การกระทำ* ไม่ใช่ของใบ
   // ถ้าเขียนลงทั้งสองที่ การรับใบครั้งต่อไปจะทับบริบทของครั้งก่อนเงียบ ๆ
+  //
+  // **`blocked` ไม่ถูกเลื่อน** — การรับใบบอกว่า *ใครถือ* ไม่ใช่ว่า *ตัวที่บล็อกหายไปแล้ว*
+  // เคยทับจริงเมื่อ 10 ต.ค. 2026 ตั้งใบเป็น `blocked` พร้อมเหตุไว้ แล้วรับ handoff ที่ค้าง
+  // สถานะเด้งกลับเป็น `in_progress` เงียบ ๆ ทั้งสองใบ · เหตุที่บล็อกยังอยู่ในบันทึก
+  // แต่สัญญาณที่เครื่องอ่านได้หายไป — `health` กับ `/view` เลิกนับใบนั้นว่าต้องปลดล็อก
+  //
+  // `done` ไม่ต้องกันที่นี่ `handoffState` คืน `obsolete` แล้วโยน error ไปก่อนถึงบรรทัดนี้
+  const keptStatus = existing.task_status === "blocked";
   const task = await updateTask(db, existing.task_id, author, {
-    status: "in_progress",
+    ...(keptStatus ? {} : { status: "in_progress" }),
     assigned_to: author.name,
   });
 
@@ -831,6 +839,7 @@ export async function acceptHandoff(
       acting_context: context,
     },
     task,
+    taskStatusKept: keptStatus,
   };
 }
 
