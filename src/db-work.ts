@@ -7,6 +7,8 @@
  */
 
 import { RequestError, postMessage, type Author } from "./db";
+// tool-kit ไม่ได้นำเข้า db-work จึงไม่เกิดวงจรการนำเข้า
+import { normalizeActingContext } from "./tool-kit";
 
 export const DECISION_STATUSES = ["proposed", "approved", "rejected"] as const;
 export type DecisionStatus = (typeof DECISION_STATUSES)[number];
@@ -42,6 +44,11 @@ export interface Decision {
   scope: DecisionScope;
   scope_set_by: string | null;
   scope_set_at: string | null;
+  /**
+   * บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนปิดใบ — `null` คือ **ไม่ได้ประกาศ**
+   * ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
+   */
+  acting_context: string | null;
 }
 
 /**
@@ -72,6 +79,11 @@ export interface Task {
    * `null` เพราะไม่เคยมีช่องให้กรอก · ผู้อ่านต้องแยกสองอย่างนี้จากผลลัพธ์เดียว
    */
   result_ref: string | null;
+  /**
+   * บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนลงมือ — `null` คือ **ไม่ได้ประกาศ**
+   * ไม่ใช่ว่าไม่มีบริบท · ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
+   */
+  acting_context: string | null;
 }
 
 /**
@@ -120,6 +132,11 @@ export interface Handoff {
   accepted_by: string | null;
   accepted_client: string | null;
   accepted_at: string | null;
+  /**
+   * บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนลงมือ — `null` คือ **ไม่ได้ประกาศ**
+   * ไม่ใช่ว่าไม่มีบริบท · ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
+   */
+  acting_context: string | null;
 }
 
 /**
@@ -289,6 +306,8 @@ export async function recordDecision(
     scope: "project",
     scope_set_by: null,
     scope_set_at: null,
+    // `record_decision` ไม่รับ acting_context ในสไลซ์แรก · บริบทถูกประกาศตอน *ปิด* ใบ
+    acting_context: null,
   };
 
   await db
@@ -457,6 +476,8 @@ export async function createTask(
     updated_at: null,
     // งานที่เพิ่งเปิดยังไม่มีผล — คืนคีย์ที่บอกว่า "ยังไม่มีตัวชี้" ไม่ใช่ปล่อยให้คีย์หาย
     result_ref: null,
+    // `create_task` ไม่รับ acting_context ในสไลซ์แรก (dis-3b5cb137 seq 44)
+    acting_context: null,
   };
 
   await db
@@ -504,6 +525,7 @@ export async function updateTask(
     assigned_to?: string | null;
     detail?: string;
     result_ref?: string | null;
+    acting_context?: string | null;
   },
 ): Promise<Task> {
   await getTask(db, id);
@@ -529,9 +551,14 @@ export async function updateTask(
     params.push(changes.result_ref);
     sets.push(`result_ref = ?${params.length}`);
   }
+  // ว่างหลังตัดช่องว่าง = ไม่ได้ประกาศ · เก็บ null ไม่เก็บสตริงว่าง
+  if (changes.acting_context !== undefined) {
+    params.push(normalizeActingContext(changes.acting_context));
+    sets.push(`acting_context = ?${params.length}`);
+  }
 
   if (sets.length === 0) {
-    throw new RequestError("ต้องระบุอย่างน้อยหนึ่งอย่างที่จะแก้ (status, assigned_to, detail หรือ result_ref)");
+    throw new RequestError("ต้องระบุอย่างน้อยหนึ่งอย่างที่จะแก้ (status, assigned_to, detail, result_ref หรือ acting_context)");
   }
 
   params.push(author.name);
@@ -636,6 +663,8 @@ export async function createHandoff(
     accepted_by: null,
     accepted_client: null,
     accepted_at: null,
+    // `create_handoff` ไม่รับ acting_context ในสไลซ์แรก · บริบทถูกประกาศตอน *รับ* ใบ
+    acting_context: null,
   };
 
   await db
@@ -740,6 +769,7 @@ export async function acceptHandoff(
   db: D1Database,
   handoffId: string,
   author: Author,
+  actingContext?: string | null,
 ): Promise<{ handoff: Handoff; task: Task }> {
   const existing = await db
     .prepare(
@@ -772,15 +802,19 @@ export async function acceptHandoff(
   }
 
   const acceptedAt = now();
+  const context = normalizeActingContext(actingContext);
   await db
     .prepare(
       `UPDATE handoffs
-          SET status = 'accepted', accepted_by = ?1, accepted_client = ?2, accepted_at = ?3
-        WHERE id = ?4`,
+          SET status = 'accepted', accepted_by = ?1, accepted_client = ?2, accepted_at = ?3,
+              acting_context = ?4
+        WHERE id = ?5`,
     )
-    .bind(author.name, author.client, acceptedAt, handoffId)
+    .bind(author.name, author.client, acceptedAt, context, handoffId)
     .run();
 
+  // **ไม่เขียน acting_context ลงใบงานด้วย** — บริบทเป็นของ *การกระทำ* ไม่ใช่ของใบ
+  // ถ้าเขียนลงทั้งสองที่ การรับใบครั้งต่อไปจะทับบริบทของครั้งก่อนเงียบ ๆ
   const task = await updateTask(db, existing.task_id, author, {
     status: "in_progress",
     assigned_to: author.name,
@@ -794,6 +828,7 @@ export async function acceptHandoff(
       accepted_by: author.name,
       accepted_client: author.client,
       accepted_at: acceptedAt,
+      acting_context: context,
     },
     task,
   };
@@ -930,6 +965,10 @@ export async function resolveDecision(
   author: Author,
   approval: { code?: string; secret?: string } = {},
   supersededBy?: string,
+  // พารามิเตอร์ใหม่ต้องอยู่ **ท้ายสุด** · ตอนแรกแทรกไว้ก่อน `supersededBy` แล้วผู้เรียก
+  // ที่ส่งแบบตำแหน่งเลื่อนทั้งแถว — `superseded_by` กลายเป็น null เงียบ ๆ และเทสต์
+  // ของ supersession หกข้อตกพร้อมกัน ซึ่งเป็นสิ่งที่ทำให้จับได้
+  actingContext?: string | null,
 ): Promise<{ decision: Decision; announced: boolean }> {
   const existing = await db
     .prepare("SELECT * FROM decisions WHERE id = ?1")
@@ -988,12 +1027,12 @@ export async function resolveDecision(
       `UPDATE decisions
           SET status = ?1, decided_by = ?2, decided_by_client = ?3,
               decided_by_kind = ?4, decided_reason = ?5, decided_at = ?6,
-              superseded_by = ?7
-        WHERE id = ?8`,
+              superseded_by = ?7, acting_context = ?8
+        WHERE id = ?9`,
     )
     .bind(
       verdict, author.name, author.client, kind, reason, decidedAt,
-      supersededBy ?? null, decisionId,
+      supersededBy ?? null, normalizeActingContext(actingContext), decisionId,
     )
     .run();
 
@@ -1027,6 +1066,9 @@ export async function resolveDecision(
       decided_reason: reason,
       decided_at: decidedAt,
       superseded_by: supersededBy ?? null,
+      // ต้อง override ด้วย · `...existing` เป็นแถว**ก่อน**อัปเดต ซึ่ง acting_context
+      // ยังเป็น null เสมอ · ลืมข้อนี้แล้วค่าที่คืนกลับไม่ตรงกับที่เก็บ และเทสต์จับได้
+      acting_context: normalizeActingContext(actingContext),
     },
     announced,
   };
