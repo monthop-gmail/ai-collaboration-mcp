@@ -64,6 +64,7 @@ type ActedAs = {
   addressed_to: string | null;
   acted_by: string | null;
   delegated: boolean;
+  same_party_different_case: boolean;
   note?: string;
 };
 
@@ -165,5 +166,102 @@ describe("update_task บอกได้ว่าผู้แก้ตรงก�
     expect(acted.delegated).toBe(false);
     expect(acted.addressed_to).toBeNull();
     expect(acted.acted_by).toBe(TEAM_B);
+  });
+});
+
+/**
+ * ทีมเดียวกันที่สะกดคนละตัวพิมพ์ — **ไม่ใช่การทำงานแทนกัน**
+ *
+ * ## แผลจริง
+ *
+ * 11 ต.ค. 2026 ZCode รับใบที่จ่าหน้า `ZCode` ด้วย header ที่สะกด `zcode` ·
+ * `acted_as` ตอบ `delegated: true` พร้อมโน้ตว่า *"The record names 'ZCode' but
+ * 'zcode' did this"* ขณะที่ `health.delegated` **ไม่นับใบนั้นเลย** เพราะเทียบด้วย
+ * `lower()` — **คำเดียวกันในสัญญาเดียวกัน ตอบตรงข้ามกันบนใบเดียวกัน**
+ *
+ * แล้ว ZCode บันทึกลงโต๊ะว่าเป็นพฤติกรรมที่ถูกต้องตามสัญญา (`dis-3b5cb137` seq 63)
+ * ซึ่งโต๊ะลบไม่ได้ · ถ้าไม่แก้ มันจะกลายเป็น baseline ให้ runtime ตัวต่อไปอ้าง
+ *
+ * ## ทำไมไม่มีด่านไหนจับ
+ *
+ * เทสต์เดิมมีสองขั้วคือ *ชื่อตรงกันเป๊ะ* กับ *คนละชื่อไปเลย* · **ไม่มีเคสที่ชื่อ
+ * เดียวกันแต่พิมพ์ไม่ตรง** ซึ่งเป็นเคสที่เกิดจริงเพราะชื่อมาจาก config ที่คนพิมพ์เอง
+ */
+describe("ทีมเดียวกัน สะกดคนละตัวพิมพ์", () => {
+  const LOWER = "owner/team-a";
+  const UPPER = "Owner/Team-A";
+
+  /** **กรณีที่ตัดสินไฟล์นี้** — ลำดับเดียวกับที่ ZCode ทำ */
+  it("รับใบที่จ่าหน้าตัวพิมพ์ใหญ่ ด้วย header ตัวพิมพ์เล็ก — ไม่ใช่การทำแทน", async () => {
+    const task = (await callTool(UPPER, "create_task", { title: "ใบของทีมเดียวกัน" }))
+      .task_id as string;
+    const handoff = (
+      await callTool(UPPER, "create_handoff", { task_id: task, to: UPPER, context: "ส่งต่อ" })
+    ).handoff_id as string;
+
+    const r = await callTool(LOWER, "accept_handoff", { handoff_id: handoff });
+    const acted = r.acted_as as ActedAs;
+
+    expect(acted.addressed_to).toBe(UPPER);
+    expect(acted.acted_by).toBe(LOWER);
+    expect(acted.delegated).toBe(false);
+    expect(acted.same_party_different_case).toBe(true);
+  });
+
+  it("บอกเหตุไว้ในโน้ต และบอกว่าต้องไปแก้ที่ไหน", async () => {
+    const task = (await callTool(UPPER, "create_task", { title: "ใบ", assigned_to: UPPER }))
+      .task_id as string;
+
+    const r = await callTool(LOWER, "update_task", { task_id: task, status: "in_progress" });
+    const acted = r.acted_as as ActedAs;
+
+    expect(acted.delegated).toBe(false);
+    expect(acted.same_party_different_case).toBe(true);
+    // โน้ตต้องปฏิเสธการตีความว่าเป็น delegation ให้ชัด ไม่ใช่แค่เงียบ
+    expect(acted.note).toContain("SAME party");
+    expect(acted.note).toContain("NOT delegation");
+    // และบอกทางแก้ — ผู้อ่านคือโมเดล ไม่ใช่คนที่เปิด repo
+    expect(acted.note).toContain("X-Client-Name");
+  });
+
+  it("ตรงกันเป๊ะ — ไม่ใช่ทั้งการทำแทนและไม่ใช่การสะกดต่าง และไม่มีโน้ต", async () => {
+    const task = (await callTool(LOWER, "create_task", { title: "ใบ", assigned_to: LOWER }))
+      .task_id as string;
+
+    const r = await callTool(LOWER, "update_task", { task_id: task, status: "in_progress" });
+    const acted = r.acted_as as ActedAs;
+
+    expect(acted.delegated).toBe(false);
+    expect(acted.same_party_different_case).toBe(false);
+    expect(acted.note).toBeUndefined();
+  });
+
+  it("คนละทีมจริง — ยังรายงานว่าทำแทน และไม่ใช่เรื่องการสะกด", async () => {
+    const task = (await callTool(TEAM_A, "create_task", { title: "ใบ", assigned_to: TEAM_A }))
+      .task_id as string;
+
+    const r = await callTool(TEAM_B, "update_task", { task_id: task, status: "in_progress" });
+    const acted = r.acted_as as ActedAs;
+
+    expect(acted.delegated).toBe(true);
+    expect(acted.same_party_different_case).toBe(false);
+    expect(acted.note).toContain("did this");
+  });
+
+  /**
+   * ตรงกับ `health.delegated` ซึ่งเทียบด้วย `lower()` — สองที่ต้องตอบเหมือนกัน
+   * เพราะความไม่ตรงกันของสองที่นี้คือตัวบั๊กเอง
+   */
+  it("ตอบตรงกับ health.delegated บนใบเดียวกัน", async () => {
+    const task = (await callTool(UPPER, "create_task", { title: "ใบ", assigned_to: UPPER }))
+      .task_id as string;
+    const r = await callTool(LOWER, "update_task", { task_id: task, status: "in_progress" });
+    expect((r.acted_as as ActedAs).delegated).toBe(false);
+
+    const ctx = await callTool(LOWER, "get_workspace_context", { limit: 1 });
+    const health = (ctx.open_items as { health: { delegated: { tasks: Array<{ task_id: string }> } } })
+      .health.delegated;
+
+    expect(health.tasks.filter((t) => t.task_id === task)).toEqual([]);
   });
 });
