@@ -300,6 +300,13 @@ export function actedAs(
   addressed_to: string | null;
   acted_by: string | null;
   delegated: boolean;
+  /**
+   * ทีมเดียวกัน แต่สะกดคนละตัวพิมพ์ — **ไม่ใช่การทำงานแทนกัน**
+   *
+   * คืนเสมอทั้งสองค่า เพราะผู้อ่านที่เห็นสองชื่อไม่เหมือนกันแต่ `delegated: false`
+   * ต้องรู้เหตุจากผลลัพธ์เดียว ไม่ใช่เดาเอง
+   */
+  same_party_different_case: boolean;
   acting_context: string | null;
   note?: string;
 } {
@@ -309,12 +316,29 @@ export function actedAs(
 
   // ไม่มีผู้ถูกระบุ ก็ไม่มีอะไรให้เทียบ — ต่างจากกรณีที่มีแล้วตรงกัน และผู้อ่าน
   // แยกสองกรณีนี้ออกได้จาก `addressed_to` ที่อยู่ในผลลัพธ์เดียวกัน
-  const delegated = addressed !== null && actor !== null && addressed !== actor;
+  //
+  // **เทียบแบบไม่สนตัวพิมพ์ — กติกาเดียวกับที่เหลือทั้งระบบ**
+  //
+  // `health.delegated` เทียบด้วย `lower()` ทั้งฝั่ง handoff และฝั่ง task · `waiting_for_you`
+  // จับคู่ปลายทางด้วย `lower()` · `get_participants` ยุบชื่อด้วย `toLowerCase()` แล้วรายงาน
+  // ทุกการสะกดไว้ใน `spellings` · ที่นี่เคยเป็นที่เดียวที่เทียบแบบสนตัวพิมพ์
+  //
+  // 11 ต.ค. 2026 ZCode รับใบที่จ่าหน้า `ZCode` ด้วย header ที่สะกด `zcode` · ที่นี่ตอบ
+  // `delegated: true` พร้อมโน้ตว่า "The record names 'ZCode' but 'zcode' did this"
+  // ขณะที่ `health.delegated` ไม่นับใบนั้นเลย — **คำเดียวกันในสัญญาเดียวกัน ตอบตรงข้ามกัน**
+  // และ ZCode บันทึกลงโต๊ะว่าเป็นพฤติกรรมที่ถูกต้อง (`dis-3b5cb137` seq 63)
+  const sameParty =
+    addressed !== null && actor !== null && addressed.toLowerCase() === actor.toLowerCase();
+  const delegated = addressed !== null && actor !== null && !sameParty;
+  // ทีมเดียวกันแต่พิมพ์ไม่ตรง — ไม่ใช่การทำงานแทนกัน แต่ยังต้องรายงาน เพราะ
+  // เครื่องมือปลายทางที่จับคู่ชื่อแบบตรงตัวจะไม่จับคู่สองแบบนี้เข้าหากัน
+  const sameCaseMismatch = sameParty && addressed !== actor;
 
   return {
     addressed_to: addressed,
     acted_by: actor,
     delegated,
+    same_party_different_case: sameCaseMismatch,
     // คืนเสมอแม้เป็น null — ผู้อ่านต้องแยก *ไม่ได้ประกาศ* ออกจาก *ระบบไม่เก็บช่องนี้*
     acting_context: normalizeActingContext(actingContext),
     ...(delegated
@@ -323,6 +347,15 @@ export function actedAs(
             `The record names '${addressed}' but '${actor}' did this. That is allowed — ` +
             "work is often picked up or finished by someone the ticket did not name. " +
             "It is reported so the record is not read as if the named party acted.",
+        }
+      : {}),
+    ...(sameCaseMismatch
+      ? {
+          note:
+            `'${addressed}' and '${actor}' are the SAME party spelled with different ` +
+            "capitalisation, so this is NOT delegation and 'delegated' is false. " +
+            "It is reported because any tool that pairs names by exact match will fail " +
+            "to pair these two. Pin one spelling in the client's X-Client-Name config.",
         }
       : {}),
   };

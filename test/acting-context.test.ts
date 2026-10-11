@@ -313,6 +313,9 @@ describe("ผู้บริโภคเดิมยังอ่านได้"
       "acting_context",
       "addressed_to",
       "delegated",
+      // เพิ่มเมื่อ 11 ต.ค. 2026 — ทีมเดียวกันที่สะกดคนละตัวพิมพ์ ไม่ใช่การทำงานแทนกัน
+      // ดู test/acted-as.test.ts และ `dis-3b5cb137` seq 63
+      "same_party_different_case",
     ]);
     // ไม่เพิ่ม authenticated_actor — ชื่อผู้ลงมืออยู่ที่ updated_by อยู่แล้ว
     expect("authenticated_actor" in r).toBe(false);
