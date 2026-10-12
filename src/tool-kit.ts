@@ -250,6 +250,23 @@ export async function run(fn: () => Promise<unknown>) {
  * เพดาน 200 ตัวอักษรเพราะช่องนี้มีไว้ตอบว่า *แทนใคร* ไม่ใช่ที่เขียนบันทึก —
  * ของยาวควรไปอยู่ใน `detail` หรือ `reason` ที่มีไว้สำหรับนั้นแล้ว
  */
+/**
+ * cursor สำหรับอ่านหน้าถัดไป — **ส่งค่าที่ได้จาก `next_cursor` เท่านั้น ห้ามประกอบเอง**
+ *
+ * มีเพราะผลอ่านถูก gateway ของ connectors ตัดที่ ~20KB โดยผู้อ่านไม่รู้ตัว ·
+ * `get_decisions` ของ ws-001 คืน 222KB เมื่อ 12 ต.ค. 2026 ผู้อ่านจึงได้ 9%
+ * แล้วเข้าใจว่าครบ (`dis-fa078bf8` seq 90–91) · `limit` เล็ก ๆ บวก cursor คือทางที่
+ * อ่านได้ครบจริง
+ */
+export const Cursor = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(
+    "Opaque cursor from a previous call's 'next_cursor'. Pass it to read the next " +
+      "page. Never build one by hand. Omit it to start from the newest rows.",
+  );
+
 export const ActingContext = z
   .string()
   .max(200)

@@ -187,7 +187,12 @@ CREATE TABLE IF NOT EXISTS handoffs (
 
   -- บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนลงมือ · NULL = ไม่ได้ประกาศ
   -- ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
-  acting_context  TEXT
+  acting_context  TEXT,
+
+  -- ความสามารถที่ผู้ส่งประกาศว่าใบนี้ต้องใช้ · NULL = ไม่ได้ประกาศ
+  -- เป็นคำประกาศ ไม่ใช่ของที่ตรวจแล้ว · server ไม่ใช้เลือกผู้รับและไม่ใช้ตัดสินสิทธิ์
+  -- (ไมเกรชัน 0007)
+  capability      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_handoffs_task    ON handoffs (task_id, created_at);
