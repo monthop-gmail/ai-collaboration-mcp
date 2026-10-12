@@ -33,6 +33,17 @@ const Kind = z
       "Pick the one that matches your intent — other participants filter on it.",
   );
 
+/**
+ * คำเตือนที่ผู้เรียกเห็นได้แม้ถือ schema เก่า
+ *
+ * connector ที่ cache schema ไว้จะไม่เห็นว่า tool มีพารามิเตอร์ใหม่ และ `contract`
+ * ยังเป็น `2` ตาม ADR-0028 จึงไม่มีสัญญาณให้ reconnect · **ช่องเดียวที่ยังผ่านไป
+ * ถึงเขาได้คือค่าในผลลัพธ์เอง** จึงบอกวิธีอ่านให้ครบไว้ในนั้น
+ */
+const TRUNCATED_CONTEXT_WARNING =
+  "ยังมี discussion มากกว่าที่คืนมา — เพิ่ม limit หรือใช้ quiet_for_days เพื่อซ่อน" +
+  "กระทู้ที่เงียบแล้ว · more discussions than returned: raise 'limit' or pass 'quiet_for_days'";
+
 export function registerTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
   const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
 
@@ -255,15 +266,27 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
           contract: CONTRACT_VERSION,
           workspace: context.workspace,
           you_are: me.name,
+          // ## สามคีย์นี้ต้องอยู่หน้าทุก array ในก้อนนี้
+          //
+          // 12 ต.ค. 2026 Grok เรียก tool นี้จริงได้ผล 26.8KB แล้ว **ถูกตัดที่ 20KB
+          // กลาง array `discussions`** — คีย์ทั้งสามเคยอยู่ท้ายก้อน ผู้อ่านจึงไม่เห็น
+          // ทั้ง `has_more`, `total_discussions` และ `quiet_discussions.hidden`
+          // ทั้งที่ description ของ tool นี้สัญญาไว้ว่า *always reports how many were hidden*
+          //
+          // รอบก่อน (`9652922`) ย้ายหัวผลลัพธ์ขึ้นหน้า array ให้ `get_decisions` ·
+          // `get_plans` · `get_tasks` · `get_handoffs` แล้วล็อกตำแหน่งไบต์ไว้ด้วยเทสต์
+          // **แต่ไม่ได้ทำกับ tool ตัวนี้** ซึ่งเป็นตัวที่ description บอกทุกคนว่า
+          // "call this first" — ด่านมีแล้วแต่ไม่ได้อยู่ตรงที่มันพัง
+          has_more: context.has_more,
+          total_discussions: context.total_discussions,
+          quiet_discussions: context.quiet_discussions,
+          ...(context.has_more ? { warning: TRUNCATED_CONTEXT_WARNING } : {}),
           // อยู่ก่อน open_items โดยตั้งใจ — กติกาต้องอ่านก่อนตัดสินใจว่าจะทำงานอย่างไร
           // ไม่ใช่เจอทีหลังตอนที่ทำผิดไปแล้ว
           standing_rules: standingRules,
           participants: context.participants,
           open_items: openItems,
           discussions: context.discussions,
-          has_more: context.has_more,
-          total_discussions: context.total_discussions,
-          quiet_discussions: context.quiet_discussions,
         };
       }),
   );
