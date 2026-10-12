@@ -185,6 +185,68 @@ describe("รูปของผลลัพธ์ถูกล็อกไว้"
     ]);
   });
 
+  /**
+   * `warning` โผล่เฉพาะตอนที่ยังมีต่อ — ซึ่งทำให้มันหลุดจากรายการข้างบน
+   *
+   * ของในโต๊ะทดสอบน้อยกว่า `limit` เสมอ คีย์นี้จึงไม่เคยปรากฏในข้อข้างบนเลย ·
+   * ถ้าไม่ล็อกไว้ที่นี่ด้วย **คีย์ที่โผล่เฉพาะตอนผิดปกติจะไม่มีด่านไหนคุม** ซึ่งเป็น
+   * รูปเดียวกับที่ทำให้ `has_more` เองไปอยู่ท้ายก้อนได้ตั้งแต่แรก
+   *
+   * เตือนแล้ว **ต้องบอกวิธีอ่านให้ครบด้วย** ไม่ใช่บอกแค่ว่าไม่ครบ
+   */
+  it("และคืน warning เพิ่มมาอีกหนึ่งคีย์เมื่อยังมีกระทู้ต่อ", async () => {
+    for (let i = 0; i < 2; i += 1) {
+      await callTool("create_discussion", { title: `กระทู้ ${i}`, body: "เนื้อ" });
+    }
+
+    const page = await callTool("get_workspace_context", { limit: 1 });
+
+    expect(page.has_more).toBe(true);
+    expect(Object.keys(page).sort()).toEqual([
+      "contract",
+      "discussions",
+      "has_more",
+      "open_items",
+      "participants",
+      "quiet_discussions",
+      "standing_rules",
+      "total_discussions",
+      "warning",
+      "workspace",
+      "you_are",
+    ]);
+  });
+
+  /**
+   * หัวของรายการทั้งสี่ tool — ล็อกเป็น **ชุดเดียว** เพราะมันต้องเหมือนกัน
+   *
+   * เคยต่างกันมาแล้ว: `9652922` พบว่า `get_decisions` กับ `get_plans` ไม่เคยคืน
+   * `contract` เลยทั้งที่อีกสองตัวคืน · ถ้าล็อกแยกไฟล์ละตัว ความต่างแบบนั้นจะอยู่
+   * ได้นานโดยไม่มีใครเห็น เพราะไม่มีที่ไหนที่ทั้งสี่ยืนข้างกัน
+   */
+  it.each([
+    ["get_tasks", "tasks"],
+    ["get_decisions", "decisions"],
+    ["get_plans", "plans"],
+    ["get_handoffs", "handoffs"],
+  ])("%s คืนหัวผลลัพธ์ชุดเดียวกัน", async (tool, rows) => {
+    const keys = Object.keys(await callTool(tool, { limit: 5 })).sort();
+
+    // `warning` ไม่อยู่ในชุดเพราะโต๊ะทดสอบว่าง · `total_actionable` มีแค่ handoffs
+    // และ `note` โผล่เฉพาะตอนมีใบที่ไม่ต้องรับ — ทั้งคู่ถูกล็อกไว้ที่ไฟล์อื่น
+    expect(keys.filter((k) => k !== "total_actionable")).toEqual(
+      [
+        "contract",
+        "has_more",
+        "next_cursor",
+        "omitted_fields",
+        rows,
+        "row_fields",
+        "total",
+      ].sort(),
+    );
+  });
+
   it("open_items คืนคีย์ชุดนี้", async () => {
     const ctx = await context();
     expect(Object.keys(ctx.open_items as object).sort()).toEqual([

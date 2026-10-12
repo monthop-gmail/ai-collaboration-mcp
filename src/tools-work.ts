@@ -55,13 +55,74 @@ const Detail = z.string().describe("Full reasoning or context. Be specific — t
  * ถูกตัดกลางทางยังขึ้นต้นด้วย `{"total":66,"has_more":true,...` ซึ่งอ่านเป็นข้อความได้
  * แม้ parse เป็น JSON ไม่ได้ · **เปลี่ยนคำตอบที่ผิดแบบเงียบ ให้เป็นคำตอบที่จับได้**
  */
-function pageHead(page: { has_more: boolean; total: number; next_cursor: string | null }): {
+/**
+ * คำเตือนที่ผู้เรียกเห็นได้แม้ถือ schema เก่า
+ *
+ * 12 ต.ค. 2026 Grok รายงานว่า connector ของเขายังเห็น inputSchema ของ `get_tasks` ·
+ * `get_handoffs` · `get_decisions` **ไม่มี `cursor`** (เซิร์ฟเวอร์รับอยู่แล้ว เรียกได้ผล)
+ * และ `contract` ยังเป็น `2` ตาม ADR-0028 จึงไม่มีสัญญาณให้ client รู้ว่าต้อง reconnect
+ *
+ * ผลคือ AI ที่ทำตามกติกาที่ตั้งกันไว้ว่า *"ใช้เฉพาะ filter ที่มีใน schema"*
+ * **จะไม่ใช้ `cursor` ทั้งที่มีแล้ว** แล้วอ่านของไม่ครบตามเดิม — การแก้ที่ schema
+ * ไปไม่ถึงเขา เพราะปัญหาอยู่ที่ของที่เขาถืออยู่ ไม่ใช่ที่ของที่เราประกาศ
+ *
+ * **ค่าในผลลัพธ์เป็นช่องทางเดียวที่ยังผ่านไปถึง schema ที่ค้างอยู่** รูปเดียวกับที่
+ * `get_discussion` ทำอยู่แล้ว
+ */
+const MORE_ROWS_WARNING =
+  "ยังมีอีก — ส่งค่า next_cursor กลับมาเป็น cursor เพื่ออ่านหน้าถัดไป · " +
+  "more rows: pass the returned next_cursor back as 'cursor'";
+
+/**
+ * หัวของผลลัพธ์ — **ต้องถูกกระจายลงไปก่อน array เสมอ**
+ *
+ * 11 ต.ค. 2026 `has_more` กับ `total` ของ `get_decisions` อยู่ที่ไบต์ 154,135 ของ
+ * ก้อนขนาด 222,806 ไบต์ ที่ถูกตัดที่ 20KB — **คำเตือนเรื่องการถูกตัด ถูกตัดไปเอง** ·
+ * วางไว้หัวก้อนแล้วผู้อ่านเห็น `total` ได้แม้ JSON จะ parse ไม่ผ่าน
+ */
+function pageHead(page: {
+  has_more: boolean;
+  total: number;
+  next_cursor: string | null;
+  row_fields: "full" | "summary";
+  omitted_fields: string[];
+}): {
   total: number;
   has_more: boolean;
   next_cursor: string | null;
+  row_fields: "full" | "summary";
+  omitted_fields: string[];
+  warning?: string;
 } {
-  return { total: page.total, has_more: page.has_more, next_cursor: page.next_cursor };
+  return {
+    total: page.total,
+    has_more: page.has_more,
+    next_cursor: page.next_cursor,
+    // คืนทั้งสองคีย์ทุกโหมด — ผู้อ่านที่ได้ของเต็มต้องมีอะไรยืนยันว่าได้ของเต็ม
+    row_fields: page.row_fields,
+    omitted_fields: page.omitted_fields,
+    ...(page.has_more ? { warning: MORE_ROWS_WARNING } : {}),
+  };
 }
+
+/**
+ * พารามิเตอร์โหมดย่อ — ถ้อยคำเดียวกันทั้งสี่ tool
+ *
+ * ประกาศที่เดียวเพราะถ้าเขียนซ้ำสี่ที่ มันจะเพี้ยนจากกันแล้วผู้อ่านจะได้คำอธิบาย
+ * คนละอย่างสำหรับของอย่างเดียวกัน — รูปเดียวกับที่ตัวนับ handoff เคยเพี้ยนสามที่
+ */
+const Summary = z
+  .boolean()
+  .default(false)
+  .describe(
+    "Leave the one long free-text field out of each row so a page holds many " +
+      "more of them. Reading all of ws-001 took 71 round-trips with full rows " +
+      "because a 1-5KB row caps a page at 2-18 entries whatever 'limit' says. " +
+      "Nothing else is dropped: every other key, including ones added later, " +
+      "stays. The reply always states 'row_fields' and 'omitted_fields', so a " +
+      "missing field is never confused with an empty one. Use it to sweep or " +
+      "count, then fetch the few rows you actually need in full.",
+  );
 
 export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
   const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
@@ -122,9 +183,10 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         status: z.enum(DECISION_STATUSES).optional().describe("Filter by status"),
         limit: Limit,
         cursor: Cursor,
+        summary: Summary,
       }),
     },
-    async ({ workspace, status, limit, cursor }) =>
+    async ({ workspace, status, limit, cursor, summary }) =>
       run(async () => {
         const page = await readDecisions(
           env.DB,
@@ -132,6 +194,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           limit,
           status as DecisionStatus | undefined,
           cursor,
+          summary,
         );
         return { contract: CONTRACT_VERSION, ...pageHead(page), decisions: page.rows };
       }),
@@ -315,6 +378,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         workspace: Workspace,
         discussion_id: z.string().optional().describe("Only plans from this discussion"),
         cursor: Cursor,
+        summary: Summary,
         include_superseded: z
           .boolean()
           .default(false)
@@ -322,12 +386,13 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         limit: Limit,
       }),
     },
-    async ({ workspace, discussion_id, include_superseded, limit, cursor }) =>
+    async ({ workspace, discussion_id, include_superseded, limit, cursor, summary }) =>
       run(async () => {
         const page = await readPlans(env.DB, usedWorkspace(workspace).id, limit, {
           discussionId: discussion_id,
           includeSuperseded: include_superseded,
           cursor,
+          summary,
         });
         return { contract: CONTRACT_VERSION, ...pageHead(page), plans: page.rows };
       }),
@@ -484,14 +549,16 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         assigned_to: z.string().optional().describe("Filter to one owner"),
         limit: Limit,
         cursor: Cursor,
+        summary: Summary,
       }),
     },
-    async ({ workspace, status, assigned_to, limit, cursor }) =>
+    async ({ workspace, status, assigned_to, limit, cursor, summary }) =>
       run(async () => {
         const page = await readTasks(env.DB, usedWorkspace(workspace).id, limit, {
           status: status as TaskStatus | undefined,
           assigned_to,
           cursor,
+          summary,
         });
         return { contract: CONTRACT_VERSION, ...pageHead(page), tasks: page.rows };
       }),
@@ -533,7 +600,13 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
               "'deploy,ssh'. DECLARED by you, not verified: the server does not " +
               "check that whoever accepts can actually do it, does not pick a taker " +
               "for you, and never uses this to decide access. Omit it when you do " +
-              "not know; omitted reads as 'not declared', not as 'needs nothing'.",
+              "not know; omitted reads as 'not declared', not as 'needs nothing'. " +
+              "Separate several with ',' and nothing else — spaces around the comma " +
+              "are stripped, and an entry may not itself contain a comma, which is " +
+              "what lets get_handoffs filter on one whole entry. Prefer a spelling " +
+              "the ecosystem already uses over inventing a near-duplicate: 'deny " +
+              "filesystem' and 'deny fs.write' do not cover each other and nothing " +
+              "reports it.",
           ),
       }),
     },
@@ -566,12 +639,18 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     {
       description:
         "List handoffs in the workspace, newest first. Call this when you join to " +
-        "see whether work is waiting for you. Defaults to pending ones only. Rows " +
+        "see whether work is waiting for you. Defaults to pending ones only. " +
+        "IMPORTANT: 'total' counts rows whose status column is still 'pending', " +
+        "which INCLUDES ones nobody needs to accept, so it runs far higher than " +
+        "the number of real open items — read 'total_actionable' for how many " +
+        "actually still need someone, and note that it is the figure " +
+        "get_workspace_context calls 'handoffs_pending'. Rows " +
         "carry 'capability' when the sender declared one — that is a DECLARATION, " +
-        "not a verified fact, and there is deliberately NO capability filter: a " +
-        "value may be a comma list, and a half-right filter is worse than none " +
-        "because you would trust it. Page through with 'cursor' and filter on your " +
-        "side instead. Each " +
+        "not a verified fact: the server never checks that whoever accepts can do " +
+        "it and never uses it to decide access. Filtering on it matches one whole " +
+        "capability out of a comma list, so asking 'b' finds 'a,b' and does NOT " +
+        "find 'bc'; ask for one at a time. Rows that declared nothing match no " +
+        "capability filter, because what they need is unknown, not empty. Each " +
         "row carries a 'state': 'waiting' still needs someone to accept it, " +
         "'stale' has been waiting over " +
         `${STALE_AFTER_DAYS} days and needs a decision rather than more waiting, ` +
@@ -586,17 +665,32 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           .describe("Which handoffs to show"),
         to: z.string().optional().describe("Filter to handoffs aimed at this name"),
         task_id: z.string().optional().describe("Filter to one task"),
+        capability: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe(
+            "Keep only handoffs whose sender declared this capability. Matches a " +
+              "whole entry in the comma list, so 'deploy' finds 'deploy,ssh' but " +
+              "not 'deployment'. ONE per call: a request for several would be the " +
+              "server choosing a taker for you. Handoffs that declared nothing are " +
+              "left out — not declared is not the same as needs nothing.",
+          ),
         limit: Limit,
         cursor: Cursor,
+        summary: Summary,
       }),
     },
-    async ({ workspace, status, to, task_id, limit, cursor }) =>
+    async ({ workspace, status, to, task_id, capability, limit, cursor, summary }) =>
       run(async () => {
         const page = await readHandoffs(env.DB, usedWorkspace(workspace).id, limit, {
           cursor,
           status,
           to_whom: to,
           task_id,
+          capability,
+          summary,
         });
         const inactive = page.rows.filter(
           (h) => !ACTIONABLE_HANDOFF_STATES.includes(h.state) && h.status === "pending",
@@ -604,6 +698,9 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         return {
           contract: CONTRACT_VERSION,
           ...pageHead(page),
+          // อยู่หน้า array เหมือนคีย์อื่นในหัว และคืนเสมอแม้เท่ากับ `total` —
+          // ผู้อ่านต้องแยก *เท่ากันพอดี* ออกจาก *เครื่องมือนี้ไม่บอก* ได้จากผลเดียว
+          total_actionable: page.total_actionable,
           handoffs: page.rows,
           ...(inactive.length > 0
             ? {

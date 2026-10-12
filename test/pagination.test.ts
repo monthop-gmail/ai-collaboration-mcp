@@ -211,18 +211,87 @@ describe("cursor เดินผ่านทุกแถวพอดีครั
 
 describe("cursor ที่พังต้องดัง ไม่ใช่เริ่มจากหน้าแรกเงียบ ๆ", () => {
   /**
-   * ถ้าปล่อยผ่าน ผู้เรียกที่ส่ง cursor ผิดจะได้หน้าแรกกลับไปแล้วเข้าใจว่าเลื่อนหน้าแล้ว
-   * ซึ่งอ่านเหมือนวนอยู่กับที่ และเป็นวิธีที่เงียบที่สุดในการอ่านของไม่ครบ
+   * ## รอบแรกไฟล์นี้ทดสอบรูปเดียว แล้วสรุปเป็นคุณสมบัติของทั้งคลาส
+   *
+   * 12 ต.ค. 2026 `it-operations-hub` โพสต์ว่าเขาทำผิดข้อเดียวกันในกระทู้เดียวกับที่
+   * เขียนกฎนั้นเอง — **ทุกทางที่ `fail` ได้ ต้องมีกรณีพิสูจน์ว่ามันยิงจริง** ·
+   * ชุดนี้จึงไล่ตาม *คลาสของ cursor ที่พัง* ไม่ใช่ตามตัวอย่างที่คิดออก
+   *
+   * รูป `เวลาถูกตัดกลาง` เป็นรูปที่ร้ายที่สุดและเป็นรูปที่หลุดด่านไปจริง — ดู
+   * `CURSOR_VERSION` ใน `db-work.ts` · อาการคือ**ข้ามแถว** ไม่ใช่เริ่มหน้าแรกใหม่
    */
-  it.each(["ไม่ใช่ cursor", "|", "2026-10-12T00:00:00.000Z|ไม่ใช่เลข", "|5"])(
-    "cursor '%s' ได้ error",
-    async (bad) => {
-      await seedSameInstant(2);
-      await expect(call("get_tasks", { workspace: WS, limit: 1, cursor: bad })).rejects.toThrow(
-        /cursor/,
-      );
-    },
-  );
+  it.each([
+    ["ไม่มีตัวคั่น", "ไม่ใช่ cursor"],
+    ["ว่างทั้งสองส่วน", "|"],
+    ["ส่วนหน้าไม่ใช่เวลา", "zzz|1"],
+    ["เวลาถูกตัดกลาง", "2026-10-10T14:5|83"],
+    ["เวลาไม่มีมิลลิวินาที", "2026-10-10T14:55:26Z|83"],
+    ["เวลาว่าง", "|5"],
+    ["rowid ว่าง", "2026-10-12T00:00:00.000Z|"],
+    ["rowid ไม่ใช่เลข", "2026-10-12T00:00:00.000Z|ไม่ใช่เลข"],
+    ["rowid เป็นศูนย์", "2026-10-12T00:00:00.000Z|0"],
+    ["rowid ติดลบ", "2026-10-12T00:00:00.000Z|-1"],
+    ["rowid มีช่องว่างนำ", "2026-10-12T00:00:00.000Z| 5"],
+    ["ค่าทึบที่ถูกตัดครึ่ง", "eyJ2IjoxLCJhdCI6IjIwMjYtMTAt"],
+    ["ค่าทึบเวอร์ชันอื่น", "eyJ2Ijo5LCJhdCI6IjIwMjYtMTAtMTJUMDA6MDA6MDAuMDAwWiIsImlkIjoxfQ"],
+  ])("cursor ที่ %s ได้ error", async (_label, bad) => {
+    await seedSameInstant(2);
+    await expect(call("get_tasks", { workspace: WS, limit: 1, cursor: bad })).rejects.toThrow(
+      /cursor/,
+    );
+  });
+
+  /**
+   * **กรณีบวกของชุดนี้** — มิวแทนต์พิสูจน์ได้แค่ว่าตัวตรวจพูดว่า "ไม่ผ่าน" เป็น
+   * ไม่ได้พิสูจน์ว่ามันพูดว่า "ผ่าน" เป็น · เคยเขียนตัวตรวจที่ผ่านมิวแทนต์ทุกตัว
+   * ทั้งที่มันรายงานไม่ผ่านกับทุกอย่าง
+   */
+  it("cursor ที่เซิร์ฟเวอร์ออกให้ ยังใช้ได้", async () => {
+    await seedSameInstant(3);
+    const first = await call("get_tasks", { workspace: WS, limit: 1 });
+
+    const second = await call("get_tasks", {
+      workspace: WS,
+      limit: 1,
+      cursor: first.next_cursor,
+    });
+
+    expect(second.tasks).toHaveLength(1);
+    expect(second.tasks[0].id).not.toBe(first.tasks[0].id);
+  });
+
+  /**
+   * ของที่ออกจากเซิร์ฟเวอร์ต้องไม่มีเวลาอ่านออกด้วยตา — ไม่ใช่เรื่องความลับ
+   * แต่เพราะรูปที่อ่านออกคือรูปที่มีคนประกอบเอง แล้วประกอบพลาดแบบที่ตรวจไม่ได้
+   */
+  it("next_cursor ทึบ — ไม่มี timestamp ให้คัดลอกบางส่วน", async () => {
+    await seedSameInstant(3);
+
+    const page = await call("get_tasks", { workspace: WS, limit: 1 });
+
+    expect(page.next_cursor).not.toContain("|");
+    expect(page.next_cursor).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(page.next_cursor).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  /**
+   * ข้อที่ทำให้ของเดิมอันตราย — cursor ที่พังไม่ได้พาไปหน้าแรก มันข้ามแถว
+   *
+   * ล็อกไว้ว่าเมื่อส่ง cursor พังเข้ามา **ไม่มีทางที่ผู้เรียกจะได้รายการที่ขาดแถว
+   * กลับไปโดยไม่รู้ตัว** เพราะไม่มีผลลัพธ์ให้เลย มีแต่ error
+   */
+  it("เวลาที่ถูกตัดกลางไม่ทำให้แถวในวินาทีนั้นหลุดหายไปเงียบ ๆ", async () => {
+    await seedSameInstant(3);
+    const all = await call("get_tasks", { workspace: WS, limit: 50 });
+    const stamp = all.tasks[0].created_at as string;
+
+    await expect(
+      call("get_tasks", { workspace: WS, limit: 50, cursor: `${stamp.slice(0, 15)}|999999` }),
+    ).rejects.toThrow(/cursor/);
+
+    // และตัวเลขเดิมไม่ถูกแตะ — ด่านอยู่ก่อนการอ่าน ไม่ใช่หลังจากอ่านมาแล้วบางส่วน
+    expect(all.total).toBe(3);
+  });
 });
 
 describe("capability บน handoff — คำประกาศของผู้ส่ง ไม่ใช่ของที่ตรวจแล้ว", () => {

@@ -8,7 +8,7 @@
 
 import { RequestError, postMessage, type Author } from "./db";
 // tool-kit ไม่ได้นำเข้า db-work จึงไม่เกิดวงจรการนำเข้า
-import { normalizeActingContext } from "./tool-kit";
+import { normalizeActingContext, normalizeCapability } from "./tool-kit";
 
 export const DECISION_STATUSES = ["proposed", "approved", "rejected"] as const;
 export type DecisionStatus = (typeof DECISION_STATUSES)[number];
@@ -241,6 +241,36 @@ const HAS_NEWER_HANDOFF = `EXISTS (
  */
 const INACTIVE_HANDOFF = `(t.status = 'done' OR ${HAS_NEWER_HANDOFF})`;
 
+/**
+ * ตัวกรอง `capability` — **หุ้มทั้งค่าที่เก็บและคำค้นด้วยตัวคั่นทั้งสองด้าน**
+ *
+ * ## ทำไมรอบแรกเราไม่ทำ และทำไมเหตุผลนั้นใช้ไม่ได้แล้ว
+ *
+ * ไมเกรชัน `0007` เขียนไว้ว่าไม่ทำตัวกรอง เพราะค่าอาจเป็น comma list แล้ว
+ * ตัวกรองตรงตัวจะพลาด `a,b` เมื่อถาม `b` ส่วน `LIKE '%b%'` จะไปโดน `bc` ด้วย —
+ * **ตัวกรองที่ถูกครึ่งเดียวแย่กว่าไม่มีตัวกรอง**
+ *
+ * `monthop-gmail/ai-tools-mcp` ตอบที่ `dis-3b5cb137` seq 81 ว่าทั้งสองข้อมาจาก
+ * สาเหตุเดียวกันคือ **token ไม่มีขอบ** · หุ้มด้วยตัวคั่นแล้วขอบมีจริง
+ *
+ * ```
+ * เก็บ "a,b" → ",a,b,"     ถาม "b"  → ",b,"   เจอ      ✅
+ *                          ถาม "bc" → ",bc,"  ไม่เจอ   ✅
+ * ```
+ *
+ * ## ทำไมใช้ `instr` ไม่ใช่ `LIKE`
+ *
+ * `LIKE` ตีความ `%` กับ `_` ในคำค้นเป็นไวลด์การ์ด · ผู้เรียกที่ถาม `capability: "%"`
+ * จะได้ทุกใบที่ประกาศอะไรไว้ แล้วเชื่อว่ากรองแล้ว — **เป็นตัวกรองที่ถูกครึ่งเดียว
+ * รูปใหม่** คนละรูปกับที่เพิ่งแก้ไป · `ESCAPE` แก้ได้ แต่ต้องไม่ลืม escape ทุกที่
+ * ทุกครั้ง · `instr` ไม่มีไวลด์การ์ดตั้งแต่ต้น **จึงลบคลาสนี้แทนที่จะกันมัน**
+ *
+ * `h.capability` ที่เป็น `NULL` ทำให้การต่อสตริงเป็น `NULL` และ `NULL > 0` เป็น `NULL`
+ * แถวนั้นจึงไม่ติดตัวกรอง — ถูกต้อง เพราะใบที่ไม่ได้ประกาศ เราไม่รู้ว่าต้องใช้อะไร
+ */
+const CAPABILITY_MATCH = (index: number) =>
+  `instr(',' || h.capability || ',', ',' || ?${index} || ',') > 0`;
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -347,6 +377,21 @@ export interface Page<T> {
   has_more: boolean;
   total: number;
   /**
+   * แถวที่คืนมาเต็มหรือย่อ — **คืนเสมอทั้งสองโหมด**
+   *
+   * ถ้าบอกเฉพาะตอนย่อ ผู้อ่านที่ได้ `full` จะไม่มีอะไรยืนยันว่าตัวเองได้ของเต็ม
+   * แล้วจะแยก *ของเต็ม* ออกจาก *เครื่องมือรุ่นเก่าที่ไม่รู้จักโหมดนี้* ไม่ได้
+   */
+  row_fields: "full" | "summary";
+  /**
+   * คีย์ที่ถูกตัดออกจากแถว — `[]` เมื่อไม่ได้ตัดอะไร
+   *
+   * **`absent` ไม่เท่ากับ `empty`** · ถ้าโหมดย่อตัด `context` ไปเฉย ๆ ผู้อ่านจะแยก
+   * *ใบนี้ไม่มีบริบท* ออกจาก *รอบนี้ไม่ได้ขอบริบทมา* ไม่ได้ และจะสรุปผิดแบบที่
+   * ไม่มีอะไรฟ้อง · รายการนี้ทำให้แยกออกได้จากผลลัพธ์เดียว
+   */
+  omitted_fields: string[];
+  /**
    * ส่งกลับมาเป็น `cursor` เพื่ออ่านหน้าถัดไป · `null` เมื่อหมดแล้ว
    *
    * คืนคีย์นี้เสมอ — ผู้อ่านต้องแยก *หมดแล้ว* ออกจาก *เครื่องมือนี้ไม่รองรับการเลื่อนหน้า*
@@ -386,22 +431,138 @@ function cursorFilter(
 }
 
 /**
+ * รูปแบบของ cursor — **ทึบโดยตั้งใจ ไม่ใช่สตริงที่ประกอบเองได้**
+ *
+ * ## แผลจริง
+ *
+ * 12 ต.ค. 2026 รูปแบบเดิมคือ `<created_at>|<rowid>` ซึ่งอ่านออกด้วยตาและประกอบเองได้
+ * `parseCursor` ตรวจแค่ว่าส่วนท้ายเป็นจำนวนเต็ม **ไม่เคยตรวจว่าส่วนหน้าเป็นเวลา** ·
+ * `it-operations-hub` ส่ง cursor ที่ถูกตัดกลาง timestamp เข้ามา
+ *
+ * ```
+ * cursor "2026-10-10T14:5|83"   ผ่านด่าน ไม่ error
+ * ที่ควรได้เป็นแถวแรก            dec-4e9b685e  created_at 2026-10-10T14:55:26.749Z
+ * ที่ได้จริง                     dec-bdbba540  created_at 2026-10-10T08:40:44.886Z
+ * ```
+ *
+ * `'2026-10-10T14:5'` เป็น prefix ของ `'2026-10-10T14:55:26.749Z'` จึงน้อยกว่าเสมอ
+ * **แถว 14:55 ทั้งกลุ่มหลุดจากเงื่อนไขไปเงียบ ๆ** · `has_more` ยังถูก `total` ยังถูก
+ * ไม่มีคีย์ไหนผิด — **มันข้ามแถว ไม่ได้เริ่มหน้าแรกใหม่** ซึ่งตรวจจากผลลัพธ์ไม่ได้เลย
+ *
+ * ## ทำไมไม่แก้ด้วยการเพิ่มรูปที่ต้องปฏิเสธ
+ *
+ * `trueforge` เคยบอกไว้ตรง ๆ ว่า *"การแก้รอบที่แล้วแก้ที่ตัวอย่าง ไม่ได้แก้ที่ชนิดของปัญหา"* ·
+ * ไล่ปิดรูปที่คิดออกได้ แต่รูปที่ยังไม่มีใครคิดถึงก็ยังผ่านอยู่ดี · **การทำให้ cursor
+ * ทึบลบทั้งคลาส** เพราะไม่มีใครประกอบค่าที่ดูสมเหตุสมผลขึ้นมาเองได้อีก
+ *
+ * เวอร์ชันอยู่ในค่า เพื่อให้ cursor ของรูปแบบถัดไปถูกปฏิเสธเสียงดัง ไม่ใช่ตีความผิด
+ */
+const CURSOR_VERSION = 1;
+
+/** ISO-8601 แบบที่ `new Date().toISOString()` คืน — ยึดความยาวตายตัว prefix จึงผ่านไม่ได้ */
+const CURSOR_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** `rowid` ของ SQLite เริ่มที่ 1 — `0` และค่าติดลบไม่ใช่แถวที่มีอยู่ */
+const CURSOR_ROWID_PATTERN = /^[1-9][0-9]*$/;
+
+function base64url(raw: string): string {
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function encodeCursor(at: string, rowid: number): string {
+  return base64url(JSON.stringify({ v: CURSOR_VERSION, at, id: rowid }));
+}
+
+/**
+ * ตรวจสองส่วนของ cursor ที่เดียว — ทั้งรูปทึบและรูปเดิมเดินผ่านด่านนี้ตัวเดียวกัน
+ *
+ * ถ้าแยกไปตรวจคนละที่ รูปหนึ่งจะหลวมกว่าอีกรูปโดยไม่มีอะไรฟ้อง ซึ่งคือแผลเดิม
+ */
+function validCursorParts(at: unknown, rowid: unknown): { at: string; rowid: number } | null {
+  if (typeof at !== "string" || !CURSOR_AT_PATTERN.test(at)) return null;
+  if (typeof rowid !== "number" || !Number.isInteger(rowid) || rowid <= 0) return null;
+  return { at, rowid };
+}
+
+function decodeOpaqueCursor(cursor: string): { at: string; rowid: number } | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) return null;
+  let decoded: unknown;
+  try {
+    const padded = cursor.replace(/-/g, "+").replace(/_/g, "/");
+    decoded = JSON.parse(atob(padded + "=".repeat((4 - (padded.length % 4)) % 4)));
+  } catch {
+    // ค่าที่ถูกตัดกลางจะพังที่ atob หรือที่ JSON.parse — ทั้งสองทางออกเป็นการปฏิเสธ
+    return null;
+  }
+  if (typeof decoded !== "object" || decoded === null) return null;
+  const { v, at, id } = decoded as { v?: unknown; at?: unknown; id?: unknown };
+  if (v !== CURSOR_VERSION) return null;
+  return validCursorParts(at, id);
+}
+
+/**
+ * รูปแบบเดิม `<created_at>|<rowid>` — **ยังรับอยู่ แต่ตรวจครบทั้งสองส่วนแล้ว**
+ *
+ * รับต่อเพราะตอนเปลี่ยนรูปแบบมีผู้เรียกถือ cursor รูปเดิมอยู่ในมือจริง ๆ ·
+ * การปฏิเสธทันทีจะทำให้การอ่านที่กำลังเดินอยู่สะดุดโดยไม่ได้เพิ่มความถูกต้อง —
+ * คลาส "ข้ามแถวเงียบ ๆ" ตายด้วยการตรวจ ไม่ใช่ด้วยการเปลี่ยนตัวเข้ารหัส
+ *
+ * ของใหม่ที่ออกจากเซิร์ฟเวอร์เป็นรูปทึบทั้งหมด จึงไม่มีใครเรียนรูปนี้เพิ่มอีก
+ */
+function decodeLegacyCursor(cursor: string): { at: string; rowid: number } | null {
+  const cut = cursor.lastIndexOf("|");
+  if (cut < 0) return null;
+  const tail = cursor.slice(cut + 1);
+  if (!CURSOR_ROWID_PATTERN.test(tail)) return null;
+  return validCursorParts(cursor.slice(0, cut), Number(tail));
+}
+
+/**
  * cursor ที่พังต้องเป็น error ไม่ใช่การเริ่มจากหน้าแรกเงียบ ๆ
  *
  * ถ้าปล่อยผ่าน ผู้เรียกที่ส่ง cursor ผิดจะได้หน้าแรกกลับไปแล้วเข้าใจว่าเลื่อนหน้าแล้ว
- * ซึ่งอ่านเหมือนวนอยู่กับที่ และเป็นวิธีที่เงียบที่สุดในการอ่านของไม่ครบ
+ * ซึ่งอ่านเหมือนวนอยู่กับที่ และเป็นวิธีที่เงียบที่สุดในการอ่านของไม่ครบ · และรูปที่
+ * แย่กว่านั้นคือรูปที่ผ่านด่านแล้ว**ข้ามแถว** ตามที่อธิบายไว้ที่ `CURSOR_VERSION`
  */
 function parseCursor(cursor: string): { at: string; rowid: number } {
-  const at = cursor.slice(0, cursor.lastIndexOf("|"));
-  const rowid = Number(cursor.slice(cursor.lastIndexOf("|") + 1));
-  if (at === "" || !Number.isInteger(rowid)) {
+  const parsed = decodeOpaqueCursor(cursor) ?? decodeLegacyCursor(cursor);
+  if (parsed === null) {
     throw new RequestError(
       `cursor '${cursor}' อ่านไม่ออก — ใช้ค่า next_cursor ที่ได้จากการเรียกครั้งก่อนเท่านั้น ` +
-        "ไม่ต้องประกอบเอง · ถ้าอยากเริ่มใหม่ให้ไม่ส่ง cursor มาเลย",
+        "ค่านี้ทึบโดยตั้งใจ ประกอบเองไม่ได้ และคัดลอกมาต้องครบทั้งค่า · " +
+        "ถ้าอยากเริ่มใหม่ให้ไม่ส่ง cursor มาเลย",
     );
   }
-  return { at, rowid };
+  return parsed;
 }
+
+/**
+ * คอลัมน์ข้อความยาวหนึ่งเดียวของแต่ละชนิด — **ตัวเดียวที่โหมดย่อตัดออก**
+ *
+ * ## ทำไมตัดแค่ช่องเดียว ไม่ใช่เลือกชุดคอลัมน์ที่จะเก็บ
+ *
+ * ถ้าโหมดย่อเป็น "รายการคอลัมน์ที่เลือกไว้" คอลัมน์ที่ไมเกรชันหน้าเพิ่มเข้ามาจะ
+ * **หายจากโหมดย่อเงียบ ๆ** โดยไม่มีใครตัดสินใจให้หาย — รูปเดียวกับไฟล์ไมเกรชันที่
+ * ไม่เคยถูกรัน คือของที่ถูกเพิ่มแล้วแต่ไม่มีด่านไหนถามถึง
+ *
+ * นิยามจึงกลับด้าน: **ตัดช่องที่ยาว เก็บที่เหลือทั้งหมด** · ช่องใหม่พรุ่งนี้อยู่ใน
+ * โหมดย่อโดยอัตโนมัติ และนั่นคือสิ่งที่ถูก เพราะช่องสั้นไม่ใช่ต้นเหตุของขนาด
+ *
+ * ## ตัวเลขที่ทำให้โหมดนี้เกิด
+ *
+ * 12 ต.ค. 2026 Grok อ่าน ws-001 ให้ครบด้วย cursor แล้วรายงานว่า **537 แถว =
+ * 71 round-trip** ในนั้น 11 ครั้งเสียไปกับการอ่านหน้าที่ถูกตัดซ้ำ เพราะแถวเต็มหนัก
+ * 1–5KB ทำให้แต่ละหน้าได้แค่ 2–18 แถวแม้ตั้ง `limit` ไว้สูงกว่านั้น · รอบก่อนเรา
+ * ปฏิเสธโหมดนี้โดยขอให้วัดมาก่อนว่าช้าตรงไหนด้วยตัวเลข — **เขาวัดมาแล้ว**
+ */
+const SUMMARY_OMIT = {
+  decisions: "detail",
+  tasks: "detail",
+  handoffs: "context",
+  plans: "body",
+} as const;
+
+type SummaryKind = keyof typeof SUMMARY_OMIT;
 
 /** อ่านรายการแบบบอกได้ว่าถูกตัดหรือไม่ — ขอเกินมาหนึ่งแถวเพื่อรู้ว่ายังมีต่อ */
 async function paginate<T>(
@@ -411,6 +572,7 @@ async function paginate<T>(
   params: unknown[],
   cursorParams: unknown[],
   limit: number,
+  shape: { kind: SummaryKind; summary: boolean },
 ): Promise<Page<T>> {
   const { results } = await db
     .prepare(listSql)
@@ -429,17 +591,29 @@ async function paginate<T>(
   const last = rows[rows.length - 1];
   const nextCursor =
     hasMore && last?.created_at && typeof last[CURSOR_COL] === "number"
-      ? `${last.created_at}|${last[CURSOR_COL]}`
+      ? encodeCursor(last.created_at, last[CURSOR_COL])
       : null;
 
   // คอลัมน์ภายในไม่หลุดออกไปในผลลัพธ์
   for (const row of rows) delete row[CURSOR_COL];
+
+  const omit = SUMMARY_OMIT[shape.kind];
+  if (shape.summary) {
+    // ช่องที่จะตัดต้องมีอยู่จริงก่อน — ถ้าไม่มี แปลว่าชื่อช่องกับตารางเพี้ยนจากกันแล้ว
+    // และโหมดย่อจะ "ตัดสำเร็จ" โดยไม่ได้ตัดอะไร ซึ่งคือการประหยัดที่ไม่เคยเกิด
+    if (rows.length > 0 && !(omit in (rows[0] as Record<string, unknown>))) {
+      throw new Error(`summary mode: ไม่มีคอลัมน์ '${omit}' ใน ${shape.kind} — ตารางเปลี่ยนรูป`);
+    }
+    for (const row of rows) delete (row as Record<string, unknown>)[omit];
+  }
 
   return {
     rows: rows as T[],
     has_more: hasMore,
     total: total?.n ?? rows.length,
     next_cursor: nextCursor,
+    row_fields: shape.summary ? "summary" : "full",
+    omitted_fields: shape.summary ? [omit] : [],
   };
 }
 
@@ -510,6 +684,8 @@ export async function readDecisions(
   status?: DecisionStatus,
   /** cursor จากการเรียกครั้งก่อน · ไม่ส่ง = เริ่มจากรายการใหม่สุด */
   cursor?: string,
+  /** ตัดช่องข้อความยาวออกเพื่ออ่านหลายแถวต่อหน้า — ดู `SUMMARY_OMIT` */
+  summary = false,
 ): Promise<Page<Decision>> {
   await requireWorkspace(db, workspaceId);
 
@@ -525,6 +701,7 @@ export async function readDecisions(
     params,
     cur.params,
     limit,
+    { kind: "decisions", summary },
   );
 }
 
@@ -667,6 +844,8 @@ export async function readTasks(
     exclude_done?: boolean;
     /** cursor จากการเรียกครั้งก่อน · ไม่ส่ง = เริ่มจากรายการใหม่สุด */
     cursor?: string;
+    /** ตัดช่องข้อความยาวออกเพื่ออ่านหลายแถวต่อหน้า — ดู `SUMMARY_OMIT` */
+    summary?: boolean;
   } = {},
 ): Promise<Page<TaskWithHandoff>> {
   await requireWorkspace(db, workspaceId);
@@ -698,6 +877,7 @@ export async function readTasks(
     params,
     cur.params,
     limit,
+    { kind: "tasks", summary: filters.summary === true },
   );
 }
 
@@ -752,7 +932,7 @@ export async function createHandoff(
     accepted_at: null,
     // `create_handoff` ไม่รับ acting_context ในสไลซ์แรก · บริบทถูกประกาศตอน *รับ* ใบ
     acting_context: null,
-    capability: normalizeActingContext(capability),
+    capability: normalizeCapability(capability),
   };
 
   await db
@@ -780,6 +960,55 @@ export async function createHandoff(
 }
 
 /**
+ * ผลของ `readHandoffs` — มี `total_actionable` เพิ่มจาก `Page` ธรรมดา
+ *
+ * ## แผลจริง
+ *
+ * 12 ต.ค. 2026 `monthop-gmail/it-operations-hub` ชี้ว่าเลขชื่อเดียวกันมีสองค่า
+ * ต่างกันแปดเท่า และไม่มีที่ไหนที่เห็นทั้งสองค่าพร้อมกัน
+ *
+ * ```
+ * get_workspace_context  open_items.handoffs_pending     5   = waiting 3 + stale 2
+ * get_handoffs           status "pending" → total       42   = 3 + 2 + obsolete 36 + superseded 1
+ * ```
+ *
+ * ทั้งสองถูกตามนิยามของตัวเอง — ตัวแรกนับของที่ยังต้องมีคนทำ ตัวหลังนับแถวที่คอลัมน์
+ * `status` ยังเป็น `pending` · **แต่ชื่อมันชนกัน** และมีคนกำลังจะเขียน stale-work
+ * sweep ทับมันพอดี ซึ่งจะรายงานว่ามีงานค้าง 42 รายการทั้งที่ต้องมีคนรับแค่ 3
+ *
+ * ไม่เปลี่ยนความหมายของ `status` เพราะนั่นคือ breaking change และ `total` ต้องคงความ
+ * หมายเดิมตาม ADR-0028 · **ที่เพิ่มคือตัวเลขที่สองมายืนข้างตัวแรก** ในที่ที่คนอ่าน
+ * ตัวแรกอยู่แล้ว ผู้อ่านจึงเห็นว่ามันต่างกันจากผลลัพธ์เดียว
+ *
+ * นับจากฐานด้วยตัวกรองชุดเดียวกัน ไม่ใช่นับจากแถวที่อ่านมาได้ — ถ้านับจากหน้าที่อ่าน
+ * ตัวเลขจะเปลี่ยนตาม `limit` แล้วโกหกทันทีที่มีหน้าที่สอง
+ */
+export interface HandoffPage extends Page<HandoffRow> {
+  total_actionable: number;
+}
+
+/**
+ * คำค้น `capability` ต้องเป็นหนึ่งอย่าง — **หลายอย่างในคำขอเดียวคือการเลือกผู้รับ**
+ *
+ * `a,b` ด้วยวิธีหุ้มตัวคั่นจะหมายถึง "ประกาศ a กับ b ติดกันในลำดับนี้พอดี" ซึ่งไม่ใช่
+ * สิ่งที่ใครจะตั้งใจถาม · ปฏิเสธเสียงดังดีกว่าตอบด้วยผลที่แปลว่าอย่างอื่น
+ *
+ * `ai-tools-mcp` ระบุเองที่ `dis-3b5cb137` seq 81 ว่า**ไม่**เสนอ `AND` หลาย capability
+ * ในคำขอเดียว เพราะนั่นคือการเลือกผู้รับ ซึ่งเป็นการตัดสินใจของคน ไม่ใช่ของ query
+ */
+function requireSingleCapability(value: string): string {
+  const normalized = normalizeCapability(value);
+  if (normalized === null || normalized.includes(",")) {
+    throw new RequestError(
+      `capability '${value}' ใช้กรองไม่ได้ — ถามได้ครั้งละหนึ่งอย่าง ` +
+        "เช่น 'deploy' ไม่ใช่ 'deploy,ssh' · ถ้าต้องการหลายอย่างให้เรียกแยกครั้ง " +
+        "แล้วรวมผลเอง เพราะการรวมเงื่อนไขให้คือการเลือกผู้รับแทนคุณ",
+    );
+  }
+  return normalized;
+}
+
+/**
  * อ่าน handoff ของ workspace เดียว พร้อมสภาพจริงของแต่ละใบ
  *
  * รับ `workspaceId` เพราะเดิมไม่รับ แล้วคืน handoff ของทุก workspace ปนกันมา ขณะที่
@@ -800,10 +1029,14 @@ export async function readHandoffs(
     status?: "pending" | "accepted";
     /** เอาเฉพาะใบที่ยังต้องมีคนรับจริง — ต้องกรองใน SQL ไม่ใช่หลังตัดด้วย LIMIT */
     actionable?: boolean;
+    /** ความสามารถหนึ่งอย่างที่ผู้ส่งประกาศไว้บนใบ — ดู `CAPABILITY_MATCH` */
+    capability?: string;
+    /** ตัดช่องข้อความยาวออกเพื่ออ่านหลายแถวต่อหน้า — ดู `SUMMARY_OMIT` */
+    summary?: boolean;
     /** cursor จากการเรียกครั้งก่อน · ไม่ส่ง = เริ่มจากรายการใหม่สุด */
     cursor?: string;
   } = {},
-): Promise<Page<HandoffRow>> {
+): Promise<HandoffPage> {
   await requireWorkspace(db, workspaceId);
 
   const clauses: string[] = ["t.workspace_id = ?1"];
@@ -824,6 +1057,11 @@ export async function readHandoffs(
     clauses.push(`NOT ${INACTIVE_HANDOFF}`);
   }
 
+  if (filters.capability !== undefined) {
+    params.push(requireSingleCapability(filters.capability));
+    clauses.push(CAPABILITY_MATCH(params.length));
+  }
+
   const where = ` WHERE ${clauses.join(" AND ")}`;
   const from = " FROM handoffs h JOIN tasks t ON t.id = h.task_id";
 
@@ -838,11 +1076,21 @@ export async function readHandoffs(
     params,
     cur.params,
     limit,
+    { kind: "handoffs", summary: filters.summary === true },
   );
+
+  // ยอดที่ยังต้องมีคนรับจริง ภายใต้ตัวกรองชุดเดียวกัน — ดู `HandoffPage`
+  const actionable = await db
+    .prepare(
+      `SELECT COUNT(*) AS n${from}${where} AND h.status = 'pending' AND NOT ${INACTIVE_HANDOFF}`,
+    )
+    .bind(...params)
+    .first<{ n: number }>();
 
   const cutoff = staleCutoff();
   return {
     ...page,
+    total_actionable: actionable?.n ?? 0,
     rows: page.rows.map((row) => {
       const { task_status: _status, has_newer: _newer, ...handoff } = row;
       return { ...handoff, state: handoffState(row, cutoff) };
@@ -1023,7 +1271,13 @@ export async function readPlans(
   db: D1Database,
   workspaceId: string,
   limit: number,
-  options: { includeSuperseded?: boolean; discussionId?: string; cursor?: string } = {},
+  options: {
+    includeSuperseded?: boolean;
+    discussionId?: string;
+    cursor?: string;
+    /** ตัดช่องข้อความยาวออกเพื่ออ่านหลายแถวต่อหน้า — ดู `SUMMARY_OMIT` */
+    summary?: boolean;
+  } = {},
 ): Promise<Page<Plan>> {
   await requireWorkspace(db, workspaceId);
 
@@ -1052,6 +1306,7 @@ export async function readPlans(
     params,
     cur.params,
     limit,
+    { kind: "plans", summary: options.summary === true },
   );
 }
 
