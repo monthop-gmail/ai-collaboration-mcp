@@ -1613,10 +1613,35 @@ export interface OpenItems {
    * เดิมรวมเป็นกองเดียวแล้วบวกยอดกัน ซึ่งอ่านผิดได้สองทาง — task ที่มาพร้อม handoff
    * ถูกนับสองครั้ง และงานที่ตัวเองรับไปทำอยู่แล้วขึ้นปนกับงานใหม่ที่ยังไม่มีใครแตะ
    * ทั้งที่สองอย่างนี้ต้องการการกระทำคนละแบบ: อันแรกต้องรับ อันหลังต้องทำต่อ
+   *
+   * **สองกองไม่พอ และ Grok ชี้ไว้ล่วงหน้าที่ `dis-c6095786` seq 52 Gate 1** — กองแรก
+   * เคยรับทุกใบที่ไม่ใช่ `in_progress` ทั้งที่คำอธิบาย tool เขียนว่ากองนั้นคือ
+   * *"tasks nobody has started"* · ใบที่ติดจริงและใบที่ตัวเองรับไปแล้วจึงขึ้นปนใน
+   * กองที่แปลว่า "ยังไม่มีใครแตะ" โดยไม่มีอะไรฟ้อง
+   *
+   * ยืนยันบน production 12 ต.ค. 2026 ด้วยใบของทีมเราเอง — ทั้งสามใบในกองนั้นไม่มี
+   * ใบไหนที่รอการรับจริงเลย: ใบหนึ่ง `blocked` ใบหนึ่งเรารับไปเมื่อ 24 ก.ย. และ
+   * อีกใบจอดไว้โดยตั้งใจ · **ผลคือเราเองรายงานงานที่จอดไว้ว่าเป็นงานค้างที่รอเราอยู่**
+   *
+   * ห้ากองนี้แบ่งแถวเดิมชุดเดียวกัน ไม่มีแถวไหนหายและไม่มีแถวไหนอยู่สองกอง จึง
+   * `total` ได้ค่าเท่าเดิมทุกตัวเลข — ที่เปลี่ยนคือการแยกแยะ ไม่ใช่ยอดรวม
+   * ส่วน `unaccepted.total` ลดลง ซึ่งเป็นการเข้าหาความหมายที่ประกาศไว้เอง ไม่ใช่
+   * การเปลี่ยนความหมาย · ลำดับการจัดกองตายตัวตาม `WAITING_BUCKET_ORDER`
    */
   waiting_for_you: {
     unaccepted: { handoffs: WaitingHandoff[]; tasks: WaitingTask[]; total: number };
     in_progress: { tasks: WaitingTask[]; total: number };
+    /** ติดจริง — ต้องปลดล็อก ไม่ใช่ต้องรับ */
+    blocked: { tasks: WaitingTask[]; total: number };
+    /** จอดไว้โดยตั้งใจ — นิยามเดียวกับ `health.open_tasks.parked` ไม่ได้นิยามใหม่ */
+    parked: { tasks: WaitingTask[]; total: number };
+    /**
+     * เรารับไปแล้วแต่สถานะยังเป็น `open` — ของเราแล้ว ไม่ใช่ของที่รอคนรับ
+     *
+     * เกิดเป็นปกติตั้งแต่ `79f0b1d` ซึ่งเลิกเลื่อนสถานะให้ตอนรับใบที่ `blocked`
+     * และเกิดอยู่ก่อนแล้วกับใบที่รับไว้แล้วยังไม่ได้เริ่ม
+     */
+    accepted_not_started: { tasks: WaitingTask[]; total: number };
     total: number;
   };
   /**
@@ -1630,6 +1655,66 @@ export interface OpenItems {
 
 /** จำกัดรายการที่ยกมาแสดง ที่เหลือดูได้จาก get_tasks / get_handoffs */
 const WAITING_PREVIEW = 10;
+
+/** แถวที่ยังมีคอลัมน์คำนวณติดมา — ต้องถอดก่อนคืน ไม่งั้นรูปของแถวต่างจาก `get_tasks` */
+type WaitingTaskRow = WaitingTask & { parked: number; taken_by_you: number };
+
+/**
+ * กองที่ใบหนึ่งจะไปอยู่ เรียงตามลำดับที่ใช้ตัดสิน
+ *
+ * **ลำดับเป็นส่วนหนึ่งของคำตอบ ไม่ใช่รายละเอียดการ implement** — ใบที่เข้าเกณฑ์
+ * สองกองพร้อมกันมีจริง (เช่นใบที่ `blocked` และขึ้นต้นว่า `PARKED`) และถ้าไม่ตรึง
+ * ลำดับไว้ ใบเดียวกันจะย้ายกองเองเมื่อมีคนเพิ่มเกณฑ์ใหม่ โดยไม่มีใครตัดสินให้ย้าย
+ *
+ * เหตุที่ `blocked` มาก่อน `parked` — ติดอยู่คือข้อเท็จจริงของวันนี้ ส่วนจอดไว้คือ
+ * การเลือกของเจ้าของใบ · ใบที่ทั้งติดและจอด ต้องอ่านว่าติด เพราะคนที่ปลดล็อกได้
+ * อาจไม่ใช่คนที่เลือกจอด
+ */
+const WAITING_BUCKET_ORDER = [
+  "in_progress",
+  "blocked",
+  "parked",
+  "accepted_not_started",
+  "unaccepted",
+] as const;
+
+type WaitingBucket = (typeof WAITING_BUCKET_ORDER)[number];
+
+/**
+ * ใบของเราแต่ละใบอยู่กองไหน
+ *
+ * **ใบที่ยังมี handoff ค้างถึงเราไม่เข้ากองไหนเลย** เพราะแถว handoff ยกมันมาแล้ว
+ * ในกอง `unaccepted.handoffs` · การยกซ้ำทำให้ยอดสูงกว่างานจริง ซึ่งเป็นข้อเดียวกับ
+ * ที่คอมเมนต์เดิมของฟังก์ชันนี้กันไว้ตั้งแต่ต้น · ราคาคือใบที่ `blocked` และมี handoff
+ * ค้างพร้อมกันจะไม่โผล่ในกอง `blocked` — ยอมจ่าย เพราะการนับซ้ำอ่านผิดได้เงียบกว่า
+ */
+function bucketWaitingTasks(
+  rows: WaitingTaskRow[],
+  handedOver: Set<string>,
+): Record<WaitingBucket, WaitingTask[]> {
+  const out: Record<WaitingBucket, WaitingTask[]> = {
+    in_progress: [],
+    blocked: [],
+    parked: [],
+    accepted_not_started: [],
+    unaccepted: [],
+  };
+
+  for (const row of rows) {
+    const { parked, taken_by_you: taken, ...task } = row;
+    if (task.status === "in_progress") out.in_progress.push(task);
+    else if (handedOver.has(task.id)) continue;
+    else if (task.status === "blocked") out.blocked.push(task);
+    else if (parked === 1) out.parked.push(task);
+    else if (taken === 1) out.accepted_not_started.push(task);
+    else out.unaccepted.push(task);
+  }
+  return out;
+}
+
+function bucketView(tasks: WaitingTask[]): { tasks: WaitingTask[]; total: number } {
+  return { tasks: tasks.slice(0, WAITING_PREVIEW), total: tasks.length };
+}
 
 /* ── สภาพของโต๊ะทั้งโต๊ะ ไม่ใช่เฉพาะของผู้เรียก ───────────────────────── */
 
@@ -2021,7 +2106,12 @@ export async function readOpenItems(
       .bind(workspaceId, myName, cutoff),
     db
       .prepare(
-        `SELECT id, title, status FROM tasks
+        `SELECT id, title, status, ${IS_PARKED} AS parked,
+                EXISTS (SELECT 1 FROM handoffs h
+                         WHERE h.task_id = tasks.id
+                           AND h.status = 'accepted'
+                           AND lower(h.accepted_by) = lower(?2)) AS taken_by_you
+           FROM tasks
           WHERE workspace_id = ?1 AND lower(assigned_to) = lower(?2)
             AND status != 'done'
           ORDER BY created_at`,
@@ -2041,16 +2131,13 @@ export async function readOpenItems(
   }
 
   const handoffRows = myHandoffs.results as WaitingHandoff[];
-  const taskRows = myTasks.results as WaitingTask[];
+  const taskRows = myTasks.results as WaitingTaskRow[];
   const planRow = (plan.results as Array<{ id: string; title: string }>)[0] ?? null;
 
   // task ที่มี handoff รออยู่แล้วถูกยกมาในกองนั้น การนับซ้ำอีกรอบทำให้ยอดสูงกว่างานจริง
   const handedOver = new Set(handoffRows.map((h) => h.task_id));
-  const inProgress = taskRows.filter((t) => t.status === "in_progress");
-  const unacceptedTasks = taskRows.filter(
-    (t) => t.status !== "in_progress" && !handedOver.has(t.id),
-  );
-  const unacceptedTotal = handoffRows.length + unacceptedTasks.length;
+  const buckets = bucketWaitingTasks(taskRows, handedOver);
+  const unacceptedTotal = handoffRows.length + buckets.unaccepted.length;
 
   return {
     decisions_awaiting: byKey.get("decisions") ?? 0,
@@ -2062,14 +2149,20 @@ export async function readOpenItems(
     waiting_for_you: {
       unaccepted: {
         handoffs: handoffRows.slice(0, WAITING_PREVIEW),
-        tasks: unacceptedTasks.slice(0, WAITING_PREVIEW),
+        tasks: buckets.unaccepted.slice(0, WAITING_PREVIEW),
         total: unacceptedTotal,
       },
-      in_progress: {
-        tasks: inProgress.slice(0, WAITING_PREVIEW),
-        total: inProgress.length,
-      },
-      total: unacceptedTotal + inProgress.length,
+      in_progress: bucketView(buckets.in_progress),
+      blocked: bucketView(buckets.blocked),
+      parked: bucketView(buckets.parked),
+      accepted_not_started: bucketView(buckets.accepted_not_started),
+      // ทุกแถวอยู่กองเดียวเท่านั้น ยอดนี้จึงเท่ากับยอดเดิมก่อนแยกกอง
+      total:
+        unacceptedTotal +
+        buckets.in_progress.length +
+        buckets.blocked.length +
+        buckets.parked.length +
+        buckets.accepted_not_started.length,
     },
     health,
   };

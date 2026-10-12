@@ -261,6 +261,22 @@ describe("รูปของผลลัพธ์ถูกล็อกไว้"
     ]);
   });
 
+  /**
+   * ล็อกทั้งห้ากองไว้ด้วยกัน ไม่ใช่ล็อกทีละกอง — กองที่หายไปจากผลลัพธ์คือกองที่
+   * ผู้อ่านจะไม่รู้ว่าเคยมี และ `absent ≠ empty` บังคับว่าต้องคืนทุกกองเสมอแม้ว่าง
+   */
+  it("waiting_for_you คืนห้ากองนี้ครบทุกครั้ง แม้โต๊ะว่าง", async () => {
+    const open = (await context()).open_items as { waiting_for_you: object };
+    expect(Object.keys(open.waiting_for_you).sort()).toEqual([
+      "accepted_not_started",
+      "blocked",
+      "in_progress",
+      "parked",
+      "total",
+      "unaccepted",
+    ]);
+  });
+
   it("health คืนหกช่องนี้", async () => {
     const open = (await context()).open_items as { health: object };
     expect(Object.keys(open.health).sort()).toEqual([
