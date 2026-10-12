@@ -232,9 +232,16 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
         "'waiting_for_you' — the work addressed to you by name. Note that " +
         "'participants' lists only names that have POSTED a message; a team " +
         "that works without posting is absent from it. Call get_participants " +
-        "when you need who has actually acted. Split into " +
-        "'unaccepted' (handoffs to accept and tasks nobody has started) and " +
-        "'in_progress' (what you already took on). Under 'health' you get the same " +
+        "when you need who has actually acted. 'waiting_for_you' splits your work " +
+        "into five buckets, and every task sits in exactly one of them, so " +
+        "'total' is the whole of it: 'unaccepted' (handoffs to accept, and tasks " +
+        "nobody has taken), 'in_progress' (what you are on), 'blocked' (needs " +
+        "unblocking, NOT accepting), 'parked' (deliberately not now — same " +
+        "definition as health.open_tasks.parked) and 'accepted_not_started' (yours " +
+        "already, status still open). IMPORTANT: before 2026-10-12 the last three " +
+        "were all reported inside 'unaccepted', so a blocked or parked task read " +
+        "as work nobody had started. If you kept a number from 'unaccepted' before " +
+        "that date, it counted more than it says. Under 'health' you get the same " +
         "kind of facts about the whole workspace rather than about you: pending " +
         "handoffs by age, records where the party who acted is not the party the " +
         "record names, open tasks parked on purpose kept apart from open tasks " +

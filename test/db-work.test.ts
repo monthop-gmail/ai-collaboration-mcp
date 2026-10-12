@@ -770,11 +770,153 @@ describe("ภาพรวมของที่ยังค้าง", () => {
     const items = await readOpenItems(env.DB, WS, "Gemini");
 
     expect(items.waiting_for_you.in_progress.tasks.map((t) => t.id)).toEqual([mine.id]);
-    expect(items.waiting_for_you.unaccepted.tasks.map((t) => t.id)).toEqual([
-      fresh.id,
-      blocked.id,
-    ]);
+    // ใบที่ติดอยู่ **ไม่ใช่** ใบที่ยังไม่มีใครรับ — บรรทัดนี้เคยยืนยันกลับกัน ดูเทสต์ถัดไป
+    expect(items.waiting_for_you.unaccepted.tasks.map((t) => t.id)).toEqual([fresh.id]);
+    expect(items.waiting_for_you.blocked.tasks.map((t) => t.id)).toEqual([blocked.id]);
     expect(items.waiting_for_you.total).toBe(3);
+  });
+
+  /**
+   * **ด่านนี้เคยมี และเคยล็อกบั๊กไว้แทนที่จะจับมัน**
+   *
+   * ก่อน 12 ต.ค. 2026 เทสต์ข้างบนเขียนว่า `unaccepted.tasks` ต้องเท่ากับ
+   * `[fresh, blocked]` ซึ่ง**ผ่านทุกรอบ** เพราะมันยืนยันพฤติกรรมที่มีอยู่ ไม่ได้
+   * ยืนยันความหมายที่ประกาศไว้ใน description ของ tool ว่ากองนั้นคือ
+   * *"tasks nobody has started"* · ใบที่ติดอยู่มีคนเริ่มแล้ว มันแค่เดินต่อไม่ได้
+   *
+   * Grok ชี้ช่องนี้ไว้ที่ `dis-c6095786` seq 52 Gate 1 ก่อนที่เราจะเห็นเอง และบอก
+   * ตรง ๆ ว่า "ไม่เจอเทสต์ที่ยืนยันกองของใบ blocked" — เทสต์ที่มีอยู่จึงเป็นด่าน
+   * ที่ยืนอยู่คนละที่กับที่มันพัง ซึ่งเป็นธีมที่ `CLAUDE.md` ของรีโปนี้เขียนไว้ทั้งข้อ
+   *
+   * เทสต์ชุดนี้จึงยืนยัน **ความหมายของทุกกอง** ไม่ใช่แค่กองที่เพิ่งแก้ รวมถึงข้อที่
+   * ยอดรวมต้องไม่ขยับ เพราะถ้าแยกกองแล้วยอดเปลี่ยน แปลว่ามีแถวหายหรือถูกนับซ้ำ
+   */
+  it("ทุกกองมีความหมายของตัวเอง และยอดรวมไม่ขยับเพราะการแยกกอง", async () => {
+    const running = await createTask(env.DB, WS, "กำลังทำ", "", chatgpt, undefined, "Gemini");
+    await updateTask(env.DB, running.id, gemini, { status: "in_progress" });
+
+    const stuck = await createTask(env.DB, WS, "ติดอยู่", "", chatgpt, undefined, "Gemini");
+    await updateTask(env.DB, stuck.id, gemini, { status: "blocked" });
+
+    const parked = await createTask(
+      env.DB,
+      WS,
+      "จอดไว้",
+      "PARKED / รอการตัดสิน",
+      chatgpt,
+      undefined,
+      "Gemini",
+    );
+
+    // รับใบไว้แล้วแต่ยังไม่ได้เริ่ม — เกิดจริงเมื่อ `accept_handoff` ไม่เลื่อนสถานะให้
+    const taken = await createTask(env.DB, WS, "รับไว้แล้ว", "", chatgpt, undefined, "Gemini");
+    const ho = await createHandoff(env.DB, taken.id, "Gemini", "ฝากต่อ", chatgpt);
+    await acceptHandoff(env.DB, ho.handoff.id, gemini);
+    await updateTask(env.DB, taken.id, gemini, { status: "open" });
+
+    const fresh = await createTask(env.DB, WS, "ยังไม่มีใครแตะ", "", chatgpt, undefined, "Gemini");
+
+    const w = (await readOpenItems(env.DB, WS, "Gemini")).waiting_for_you;
+
+    expect(w.in_progress.tasks.map((t) => t.id)).toEqual([running.id]);
+    expect(w.blocked.tasks.map((t) => t.id)).toEqual([stuck.id]);
+    expect(w.parked.tasks.map((t) => t.id)).toEqual([parked.id]);
+    expect(w.accepted_not_started.tasks.map((t) => t.id)).toEqual([taken.id]);
+
+    // กรณีบวก — กองที่เพิ่งแก้ต้องยัง "ติด" ของที่ควรติดอยู่ ไม่ใช่ว่างเปล่าตลอด
+    expect(w.unaccepted.tasks.map((t) => t.id)).toEqual([fresh.id]);
+
+    // ห้าใบ ห้ากอง ไม่มีใบไหนอยู่สองกองและไม่มีใบไหนหาย
+    expect(w.total).toBe(5);
+    expect(
+      w.unaccepted.total +
+        w.in_progress.total +
+        w.blocked.total +
+        w.parked.total +
+        w.accepted_not_started.total,
+    ).toBe(w.total);
+  });
+
+  /**
+   * ใบที่เข้าเกณฑ์สองกองพร้อมกันมีจริง และลำดับต้องตายตัว ไม่ใช่ขึ้นกับว่าใครเขียน
+   * เงื่อนไขไว้ก่อน — ดู `WAITING_BUCKET_ORDER` · ติดอยู่คือข้อเท็จจริงของวันนี้
+   * ส่วนจอดไว้คือการเลือก คนที่ปลดล็อกได้อาจไม่ใช่คนที่เลือกจอด
+   */
+  it("ใบที่ทั้งติดและจอด อ่านว่าติด", async () => {
+    const both = await createTask(
+      env.DB,
+      WS,
+      "ทั้งติดทั้งจอด",
+      "PARKED / และยังติดอยู่ด้วย",
+      chatgpt,
+      undefined,
+      "Gemini",
+    );
+    await updateTask(env.DB, both.id, gemini, { status: "blocked" });
+
+    const w = (await readOpenItems(env.DB, WS, "Gemini")).waiting_for_you;
+    expect(w.blocked.tasks.map((t) => t.id)).toEqual([both.id]);
+    expect(w.parked.tasks).toEqual([]);
+    expect(w.unaccepted.tasks).toEqual([]);
+  });
+
+  /**
+   * **ขอบของกอง `accepted_not_started` คือคำว่า "เรา" ไม่ใช่คำว่า "มีคนรับแล้ว"**
+   *
+   * มิวแทนต์ที่เปลี่ยนเงื่อนไขจาก `accepted_by = ฉัน` เป็น `accepted_by ไม่ว่าง`
+   * รอดจากเทสต์ชุดแรกทั้งชุด เพราะในฉากนั้นผู้รับกับผู้อ่านเป็นคนเดียวกัน —
+   * ตัวตรวจที่แยกสองอย่างนี้ไม่ออกจะรายงานว่าใบที่ทีมอื่นรับไปเป็นงานที่เราถืออยู่
+   *
+   * ฉากนี้คือ `health.delegated` ของจริง — ใบจ่าหน้าถึงเรา แต่คนอื่นกดรับ
+   */
+  it("ใบที่คนอื่นกดรับ ไม่ใช่ใบที่เราถืออยู่", async () => {
+    const t = await createTask(env.DB, WS, "คนอื่นรับไป", "", chatgpt, undefined, "Gemini");
+    const ho = await createHandoff(env.DB, t.id, "Gemini", "ฝากต่อ", chatgpt);
+    await acceptHandoff(env.DB, ho.handoff.id, claude);
+    // การรับย้าย assigned_to ไปที่ผู้รับ — ตั้งกลับเพื่อจำลองใบที่ยังอยู่บนโต๊ะเรา
+    await updateTask(env.DB, t.id, chatgpt, { assigned_to: "Gemini", status: "open" });
+
+    const w = (await readOpenItems(env.DB, WS, "Gemini")).waiting_for_you;
+    expect(w.accepted_not_started.tasks).toEqual([]);
+    expect(w.unaccepted.tasks.map((x) => x.id)).toEqual([t.id]);
+  });
+
+  /**
+   * **ชื่อเดียวกันที่สะกดคนละตัวพิมพ์ ต้องเป็นทีมเดียวกันทุกช่องที่เทียบชื่อ**
+   *
+   * `9b498ff` แก้ข้อนี้ไปแล้วที่ `health.delegated` และ `waiting_for_you` เทียบ
+   * `assigned_to`/`to_whom` แบบไม่สนตัวพิมพ์มาตั้งแต่ต้น — แต่ `accepted_by`
+   * เป็นช่องใหม่ในเส้นนี้ และมิวแทนต์ที่เปลี่ยนเป็นเทียบตรงตัวรอดจากทุกเทสต์
+   *
+   * ถ้าหลุด อาการคือใบที่เรารับเองกลับไปอยู่ในกอง "ยังไม่มีใครรับ" เฉพาะทีมที่
+   * สะกดชื่อคนละแบบในสองที่ ซึ่งเป็นรูปที่หาไม่เจอด้วยการอ่านผลของตัวเอง
+   */
+  it("accepted_by สะกดคนละตัวพิมพ์ ยังเป็นทีมเดียวกัน", async () => {
+    const t = await createTask(env.DB, WS, "รับด้วยชื่อตัวใหญ่", "", chatgpt, undefined, "Gemini");
+    const ho = await createHandoff(env.DB, t.id, "Gemini", "ฝากต่อ", chatgpt);
+    await acceptHandoff(env.DB, ho.handoff.id, { client: "c-gemini", name: "GEMINI" });
+    await updateTask(env.DB, t.id, chatgpt, { status: "open" });
+
+    const w = (await readOpenItems(env.DB, WS, "Gemini")).waiting_for_you;
+    expect(w.accepted_not_started.tasks.map((x) => x.id)).toEqual([t.id]);
+    expect(w.unaccepted.tasks).toEqual([]);
+  });
+
+  /**
+   * ใบที่ยังมี handoff ค้างถึงเราถูกยกมาแล้วในกอง handoff — ยกซ้ำในกอง task
+   * ทำให้ยอดสูงกว่างานจริง ซึ่งเป็นข้อที่ฟังก์ชันนี้กันไว้ตั้งแต่ต้น การแยกกอง
+   * ห้ามรื้อข้อนั้นทิ้ง
+   */
+  it("ใบที่ handoff ยังค้างอยู่ ไม่ถูกนับซ้ำในกองไหนเลย", async () => {
+    const t = await createTask(env.DB, WS, "ติดและมีใบฝากค้าง", "", chatgpt, undefined, "Gemini");
+    await updateTask(env.DB, t.id, gemini, { status: "blocked" });
+    await createHandoff(env.DB, t.id, "Gemini", "ฝากต่อ", chatgpt);
+
+    const w = (await readOpenItems(env.DB, WS, "Gemini")).waiting_for_you;
+    expect(w.unaccepted.handoffs).toHaveLength(1);
+    expect(w.blocked.tasks).toEqual([]);
+    expect(w.unaccepted.tasks).toEqual([]);
+    expect(w.total).toBe(1);
   });
 
   /**
