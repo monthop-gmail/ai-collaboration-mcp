@@ -27,6 +27,8 @@ import {
 } from "./db-work";
 import {
   ActingContext,
+  CONTRACT_VERSION,
+  Cursor,
   Limit,
   Workspace,
   actedAs,
@@ -41,6 +43,26 @@ import {
 const Detail = z.string().describe("Full reasoning or context. Be specific — this is what a participant who was not present will read.");
 
 /** tools ของ Phase 2 — สิ่งที่ตกผลึกจากการคุยแล้วต้องมีคนทำต่อ */
+/**
+ * หัวของผลลัพธ์รายการ — **ต้องอยู่ก่อน array ทุกครั้ง**
+ *
+ * 12 ต.ค. 2026 วัดของจริง `get_decisions` คืน 222,806 ไบต์ แต่ gateway ของ connectors
+ * ตัดที่ ~20KB · `has_more` กับ `total` อยู่ที่ไบต์ 154,135 จึง **ไม่เคยไปถึงผู้อ่าน
+ * ในกรณีเดียวที่ผู้อ่านต้องการมัน** — ผู้อ่านได้ข้อมูล 9% แล้วเข้าใจว่าครบ
+ * (`dis-fa078bf8` seq 90–91)
+ *
+ * ลำดับคีย์ของ object ถูกรักษาไว้ตอน serialize · วางหัวไว้ก่อน array แล้วข้อความที่
+ * ถูกตัดกลางทางยังขึ้นต้นด้วย `{"total":66,"has_more":true,...` ซึ่งอ่านเป็นข้อความได้
+ * แม้ parse เป็น JSON ไม่ได้ · **เปลี่ยนคำตอบที่ผิดแบบเงียบ ให้เป็นคำตอบที่จับได้**
+ */
+function pageHead(page: { has_more: boolean; total: number; next_cursor: string | null }): {
+  total: number;
+  has_more: boolean;
+  next_cursor: string | null;
+} {
+  return { total: page.total, has_more: page.has_more, next_cursor: page.next_cursor };
+}
+
 export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
   const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
 
@@ -99,17 +121,19 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         workspace: Workspace,
         status: z.enum(DECISION_STATUSES).optional().describe("Filter by status"),
         limit: Limit,
+        cursor: Cursor,
       }),
     },
-    async ({ workspace, status, limit }) =>
+    async ({ workspace, status, limit, cursor }) =>
       run(async () => {
         const page = await readDecisions(
           env.DB,
           usedWorkspace(workspace).id,
           limit,
           status as DecisionStatus | undefined,
+          cursor,
         );
-        return { decisions: page.rows, has_more: page.has_more, total: page.total };
+        return { contract: CONTRACT_VERSION, ...pageHead(page), decisions: page.rows };
       }),
   );
 
@@ -290,6 +314,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
       inputSchema: z.object({
         workspace: Workspace,
         discussion_id: z.string().optional().describe("Only plans from this discussion"),
+        cursor: Cursor,
         include_superseded: z
           .boolean()
           .default(false)
@@ -297,13 +322,14 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         limit: Limit,
       }),
     },
-    async ({ workspace, discussion_id, include_superseded, limit }) =>
+    async ({ workspace, discussion_id, include_superseded, limit, cursor }) =>
       run(async () => {
         const page = await readPlans(env.DB, usedWorkspace(workspace).id, limit, {
           discussionId: discussion_id,
           includeSuperseded: include_superseded,
+          cursor,
         });
-        return { plans: page.rows, has_more: page.has_more, total: page.total };
+        return { contract: CONTRACT_VERSION, ...pageHead(page), plans: page.rows };
       }),
   );
 
@@ -457,15 +483,17 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         status: z.enum(TASK_STATUSES).optional(),
         assigned_to: z.string().optional().describe("Filter to one owner"),
         limit: Limit,
+        cursor: Cursor,
       }),
     },
-    async ({ workspace, status, assigned_to, limit }) =>
+    async ({ workspace, status, assigned_to, limit, cursor }) =>
       run(async () => {
         const page = await readTasks(env.DB, usedWorkspace(workspace).id, limit, {
           status: status as TaskStatus | undefined,
           assigned_to,
+          cursor,
         });
-        return { tasks: page.rows, has_more: page.has_more, total: page.total };
+        return { contract: CONTRACT_VERSION, ...pageHead(page), tasks: page.rows };
       }),
   );
 
@@ -496,9 +524,20 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
               "what angle you want, what is out of scope this round, and where the " +
               "result should go.",
           ),
+        capability: z
+          .string()
+          .max(200)
+          .optional()
+          .describe(
+            "What this handoff needs the taker to be able to do, e.g. 'deploy' or " +
+              "'deploy,ssh'. DECLARED by you, not verified: the server does not " +
+              "check that whoever accepts can actually do it, does not pick a taker " +
+              "for you, and never uses this to decide access. Omit it when you do " +
+              "not know; omitted reads as 'not declared', not as 'needs nothing'.",
+          ),
       }),
     },
-    async ({ task_id, to, context }) =>
+    async ({ task_id, to, context, capability }) =>
       run(async () => {
         const { handoff, task } = await createHandoff(
           env.DB,
@@ -506,6 +545,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           to,
           context,
           author(),
+          capability,
         );
         return {
           handoff_id: handoff.id,
@@ -514,6 +554,8 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           from: handoff.from_name,
           task_assigned_to: task.assigned_to,
           status: handoff.status,
+          // คืนเสมอแม้เป็น null — ผู้อ่านต้องแยก *ไม่ได้ประกาศ* ออกจาก *ระบบไม่เก็บช่องนี้*
+          capability: handoff.capability,
         };
       }),
   );
@@ -524,7 +566,12 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
     {
       description:
         "List handoffs in the workspace, newest first. Call this when you join to " +
-        "see whether work is waiting for you. Defaults to pending ones only. Each " +
+        "see whether work is waiting for you. Defaults to pending ones only. Rows " +
+        "carry 'capability' when the sender declared one — that is a DECLARATION, " +
+        "not a verified fact, and there is deliberately NO capability filter: a " +
+        "value may be a comma list, and a half-right filter is worse than none " +
+        "because you would trust it. Page through with 'cursor' and filter on your " +
+        "side instead. Each " +
         "row carries a 'state': 'waiting' still needs someone to accept it, " +
         "'stale' has been waiting over " +
         `${STALE_AFTER_DAYS} days and needs a decision rather than more waiting, ` +
@@ -540,11 +587,13 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
         to: z.string().optional().describe("Filter to handoffs aimed at this name"),
         task_id: z.string().optional().describe("Filter to one task"),
         limit: Limit,
+        cursor: Cursor,
       }),
     },
-    async ({ workspace, status, to, task_id, limit }) =>
+    async ({ workspace, status, to, task_id, limit, cursor }) =>
       run(async () => {
         const page = await readHandoffs(env.DB, usedWorkspace(workspace).id, limit, {
+          cursor,
           status,
           to_whom: to,
           task_id,
@@ -553,9 +602,9 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
           (h) => !ACTIONABLE_HANDOFF_STATES.includes(h.state) && h.status === "pending",
         );
         return {
+          contract: CONTRACT_VERSION,
+          ...pageHead(page),
           handoffs: page.rows,
-          has_more: page.has_more,
-          total: page.total,
           ...(inactive.length > 0
             ? {
                 note:

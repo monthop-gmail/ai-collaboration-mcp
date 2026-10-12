@@ -137,6 +137,15 @@ export interface Handoff {
    * ไม่ใช่ว่าไม่มีบริบท · ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
    */
   acting_context: string | null;
+  /**
+   * ความสามารถที่ **ผู้ส่งประกาศ** ว่าใบนี้ต้องใช้ — `null` คือ *ไม่ได้ประกาศ*
+   * ไม่ใช่ว่าใบนี้ไม่ต้องใช้อะไร
+   *
+   * **ไม่ใช่ความสามารถที่ตรวจแล้ว** · server ไม่ตรวจว่าผู้รับทำได้จริง ไม่ใช้เลือก
+   * ผู้รับให้ และไม่ใช้ตัดสินสิทธิ์ · ขอโดย `dis-3b5cb137` seq 67–68 เพื่อให้ runtime
+   * ที่ว่างหยิบใบที่ตัวเองทำได้ แทนการจ่าหน้าถึงชื่อ (ไมเกรชัน 0007)
+   */
+  capability: string | null;
 }
 
 /**
@@ -337,6 +346,61 @@ export interface Page<T> {
   rows: T[];
   has_more: boolean;
   total: number;
+  /**
+   * ส่งกลับมาเป็น `cursor` เพื่ออ่านหน้าถัดไป · `null` เมื่อหมดแล้ว
+   *
+   * คืนคีย์นี้เสมอ — ผู้อ่านต้องแยก *หมดแล้ว* ออกจาก *เครื่องมือนี้ไม่รองรับการเลื่อนหน้า*
+   */
+  next_cursor: string | null;
+}
+
+/** คอลัมน์ภายในที่ใช้ทำ cursor — ถูกลบออกก่อนคืนให้ผู้เรียก */
+const CURSOR_COL = "_cursor_rowid";
+
+interface CursorRow {
+  created_at?: string | null;
+  [CURSOR_COL]?: number | null;
+}
+
+/**
+ * เงื่อนไขของ cursor — **เรียงด้วยเวลาแล้วต่อด้วย `rowid` เสมอ**
+ *
+ * เวลาใน Workers ไม่ขยับระหว่างโค้ดที่รันติดกัน สองแถวที่สร้างในคำขอเดียวกันจึงได้
+ * `created_at` เท่ากัน · ถ้า cursor เทียบแค่เวลา แถวที่เวลาเท่ากันจะถูกข้ามหรือซ้ำ
+ * โดยไม่มีอะไรฟ้อง — กติกาเดียวกับที่ `HAS_NEWER_HANDOFF` ใช้อยู่แล้ว
+ */
+function cursorFilter(
+  alias: string,
+  cursor: string | undefined,
+  firstIndex: number,
+): { sql: string; params: unknown[] } {
+  if (cursor === undefined) return { sql: "", params: [] };
+  const parsed = parseCursor(cursor);
+  const col = alias === "" ? "" : `${alias}.`;
+  return {
+    sql:
+      ` AND (${col}created_at < ?${firstIndex}` +
+      ` OR (${col}created_at = ?${firstIndex} AND ${col}rowid < ?${firstIndex + 1}))`,
+    params: [parsed.at, parsed.rowid],
+  };
+}
+
+/**
+ * cursor ที่พังต้องเป็น error ไม่ใช่การเริ่มจากหน้าแรกเงียบ ๆ
+ *
+ * ถ้าปล่อยผ่าน ผู้เรียกที่ส่ง cursor ผิดจะได้หน้าแรกกลับไปแล้วเข้าใจว่าเลื่อนหน้าแล้ว
+ * ซึ่งอ่านเหมือนวนอยู่กับที่ และเป็นวิธีที่เงียบที่สุดในการอ่านของไม่ครบ
+ */
+function parseCursor(cursor: string): { at: string; rowid: number } {
+  const at = cursor.slice(0, cursor.lastIndexOf("|"));
+  const rowid = Number(cursor.slice(cursor.lastIndexOf("|") + 1));
+  if (at === "" || !Number.isInteger(rowid)) {
+    throw new RequestError(
+      `cursor '${cursor}' อ่านไม่ออก — ใช้ค่า next_cursor ที่ได้จากการเรียกครั้งก่อนเท่านั้น ` +
+        "ไม่ต้องประกอบเอง · ถ้าอยากเริ่มใหม่ให้ไม่ส่ง cursor มาเลย",
+    );
+  }
+  return { at, rowid };
 }
 
 /** อ่านรายการแบบบอกได้ว่าถูกตัดหรือไม่ — ขอเกินมาหนึ่งแถวเพื่อรู้ว่ายังมีต่อ */
@@ -345,23 +409,37 @@ async function paginate<T>(
   listSql: string,
   countSql: string,
   params: unknown[],
+  cursorParams: unknown[],
   limit: number,
 ): Promise<Page<T>> {
   const { results } = await db
     .prepare(listSql)
-    .bind(...params, limit + 1)
-    .all<T>();
+    .bind(...params, ...cursorParams, limit + 1)
+    .all<T & CursorRow>();
 
   const hasMore = results.length > limit;
+  const rows = hasMore ? results.slice(0, limit) : results;
+  // `total` ต้องเป็นยอดทั้งหมดของตัวกรอง **ไม่ใช่ยอดที่เหลือจาก cursor** —
+  // พารามิเตอร์ของ cursor จึงไม่ถูกผูกเข้ากับคิวรีนับ ความหมายของคีย์เดิมไม่เปลี่ยน
   const total = await db
     .prepare(countSql)
     .bind(...params)
     .first<{ n: number }>();
 
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    hasMore && last?.created_at && typeof last[CURSOR_COL] === "number"
+      ? `${last.created_at}|${last[CURSOR_COL]}`
+      : null;
+
+  // คอลัมน์ภายในไม่หลุดออกไปในผลลัพธ์
+  for (const row of rows) delete row[CURSOR_COL];
+
   return {
-    rows: hasMore ? results.slice(0, limit) : results,
+    rows: rows as T[],
     has_more: hasMore,
-    total: total?.n ?? results.length,
+    total: total?.n ?? rows.length,
+    next_cursor: nextCursor,
   };
 }
 
@@ -430,19 +508,22 @@ export async function readDecisions(
   workspaceId: string,
   limit: number,
   status?: DecisionStatus,
+  /** cursor จากการเรียกครั้งก่อน · ไม่ส่ง = เริ่มจากรายการใหม่สุด */
+  cursor?: string,
 ): Promise<Page<Decision>> {
   await requireWorkspace(db, workspaceId);
 
   const filter = status ? " AND status = ?2" : "";
   const params: unknown[] = status ? [workspaceId, status] : [workspaceId];
-  const next = status ? "?3" : "?2";
+  const cur = cursorFilter("", cursor, params.length + 1);
 
   return paginate<Decision>(
     db,
-    `SELECT * FROM decisions WHERE workspace_id = ?1${filter}
-      ORDER BY created_at DESC LIMIT ${next}`,
+    `SELECT *, rowid AS ${CURSOR_COL} FROM decisions WHERE workspace_id = ?1${filter}${cur.sql}
+      ORDER BY created_at DESC, rowid DESC LIMIT ?${params.length + cur.params.length + 1}`,
     `SELECT COUNT(*) AS n FROM decisions WHERE workspace_id = ?1${filter}`,
     params,
+    cur.params,
     limit,
   );
 }
@@ -584,6 +665,8 @@ export async function readTasks(
     assigned_to?: string;
     /** ตัดงานที่ปิดแล้วออกตั้งแต่ใน SQL — กรองหลัง LIMIT จะทำให้ใบเก่าที่ยังค้างหายไป */
     exclude_done?: boolean;
+    /** cursor จากการเรียกครั้งก่อน · ไม่ส่ง = เริ่มจากรายการใหม่สุด */
+    cursor?: string;
   } = {},
 ): Promise<Page<TaskWithHandoff>> {
   await requireWorkspace(db, workspaceId);
@@ -604,13 +687,16 @@ export async function readTasks(
 
   const where = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
 
+  const cur = cursorFilter("t", filters.cursor, params.length + 1);
+
   return paginate<TaskWithHandoff>(
     db,
-    `SELECT t.*, ${CURRENT_HANDOFF_ID} AS handoff
-       FROM tasks t WHERE t.workspace_id = ?1${where}
-      ORDER BY t.created_at DESC LIMIT ?${params.length + 1}`,
+    `SELECT t.*, ${CURRENT_HANDOFF_ID} AS handoff, t.rowid AS ${CURSOR_COL}
+       FROM tasks t WHERE t.workspace_id = ?1${where}${cur.sql}
+      ORDER BY t.created_at DESC, t.rowid DESC LIMIT ?${params.length + cur.params.length + 1}`,
     `SELECT COUNT(*) AS n FROM tasks t WHERE t.workspace_id = ?1${where}`,
     params,
+    cur.params,
     limit,
   );
 }
@@ -648,6 +734,7 @@ export async function createHandoff(
   toWhom: string,
   context: string,
   author: Author,
+  capability?: string | null,
 ): Promise<{ handoff: Handoff; task: Task }> {
   await getTask(db, taskId);
 
@@ -665,13 +752,15 @@ export async function createHandoff(
     accepted_at: null,
     // `create_handoff` ไม่รับ acting_context ในสไลซ์แรก · บริบทถูกประกาศตอน *รับ* ใบ
     acting_context: null,
+    capability: normalizeActingContext(capability),
   };
 
   await db
     .prepare(
       `INSERT INTO handoffs
-         (id, task_id, to_whom, context, status, from_name, from_client, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+         (id, task_id, to_whom, context, status, from_name, from_client, created_at,
+          capability)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
     )
     .bind(
       handoff.id,
@@ -682,6 +771,7 @@ export async function createHandoff(
       handoff.from_name,
       handoff.from_client,
       handoff.created_at,
+      handoff.capability,
     )
     .run();
 
@@ -710,6 +800,8 @@ export async function readHandoffs(
     status?: "pending" | "accepted";
     /** เอาเฉพาะใบที่ยังต้องมีคนรับจริง — ต้องกรองใน SQL ไม่ใช่หลังตัดด้วย LIMIT */
     actionable?: boolean;
+    /** cursor จากการเรียกครั้งก่อน · ไม่ส่ง = เริ่มจากรายการใหม่สุด */
+    cursor?: string;
   } = {},
 ): Promise<Page<HandoffRow>> {
   await requireWorkspace(db, workspaceId);
@@ -735,12 +827,16 @@ export async function readHandoffs(
   const where = ` WHERE ${clauses.join(" AND ")}`;
   const from = " FROM handoffs h JOIN tasks t ON t.id = h.task_id";
 
+  const cur = cursorFilter("h", filters.cursor, params.length + 1);
+
   const page = await paginate<HandoffJoinRow>(
     db,
-    `SELECT h.*, t.status AS task_status, ${HAS_NEWER_HANDOFF} AS has_newer${from}${where}
-      ORDER BY h.created_at DESC LIMIT ?${params.length + 1}`,
+    `SELECT h.*, t.status AS task_status, ${HAS_NEWER_HANDOFF} AS has_newer,
+            h.rowid AS ${CURSOR_COL}${from}${where}${cur.sql}
+      ORDER BY h.created_at DESC, h.rowid DESC LIMIT ?${params.length + cur.params.length + 1}`,
     `SELECT COUNT(*) AS n${from}${where}`,
     params,
+    cur.params,
     limit,
   );
 
@@ -927,7 +1023,7 @@ export async function readPlans(
   db: D1Database,
   workspaceId: string,
   limit: number,
-  options: { includeSuperseded?: boolean; discussionId?: string } = {},
+  options: { includeSuperseded?: boolean; discussionId?: string; cursor?: string } = {},
 ): Promise<Page<Plan>> {
   await requireWorkspace(db, workspaceId);
 
@@ -946,12 +1042,15 @@ export async function readPlans(
 
   const where = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
 
+  const cur = cursorFilter("", options.cursor, params.length + 1);
+
   return paginate<Plan>(
     db,
-    `SELECT * FROM plans WHERE workspace_id = ?1${where}
-      ORDER BY created_at DESC LIMIT ?${params.length + 1}`,
+    `SELECT *, rowid AS ${CURSOR_COL} FROM plans WHERE workspace_id = ?1${where}${cur.sql}
+      ORDER BY created_at DESC, rowid DESC LIMIT ?${params.length + cur.params.length + 1}`,
     `SELECT COUNT(*) AS n FROM plans WHERE workspace_id = ?1${where}`,
     params,
+    cur.params,
     limit,
   );
 }
