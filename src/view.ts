@@ -18,6 +18,7 @@ import { EDGES, MISSING } from "./graph";
 import {
   readDecisions,
   readGraphStats,
+  readHandoffMap,
   readHandoffStateCounts,
   readItemTotals,
   readHandoffs,
@@ -55,6 +56,9 @@ const CITY_PATH = "3d";
 
 /** กราฟความรู้ — เส้นทางย่อยของ `/view` ด้วยเหตุผลเดียวกับ `CITY_PATH` */
 const GRAPH_PATH = "graph";
+
+/** แผนที่การส่งงาน — เส้นทางย่อยเช่นเดียวกัน */
+const MAP_PATH = "handoffs";
 
 const COOKIE = "collab_view";
 
@@ -274,6 +278,8 @@ function renderList(
       `เมืองสามมิติ →</a></span>` +
       `<span><a href="${VIEW_ROUTE}/${GRAPH_PATH}?ws=${encodeURIComponent(workspace)}">` +
       `กราฟความรู้ →</a></span>` +
+      `<span><a href="${VIEW_ROUTE}/${MAP_PATH}?ws=${encodeURIComponent(workspace)}">` +
+      `แผนที่การส่งงาน →</a></span>` +
       `<span title="${esc(CONTRACT_TITLE)}">contract ${CONTRACT_VERSION}</span>` +
       deployedFrom(commitSha) +
       `</div>` +
@@ -750,6 +756,207 @@ async function renderCity(env: Env, workspace: string): Promise<Response> {
   return page(`เมืองของโต๊ะ ${workspace}`, body, CITY_STYLE, "city");
 }
 
+/* ── แผนที่การส่งงาน ────────────────────────────────────────────────────────
+ *
+ * ตอบคำถามที่ไม่มีที่ไหนในระบบตอบได้ — **ใครส่งงานให้ใคร และใครรับไปจริง**
+ *
+ * `health.delegated` รายงานเป็นยอดว่ามีกี่ใบที่ผู้กดรับไม่ใช่ชื่อที่จ่าหน้าถึง แต่ยอดเดียว
+ * ไม่บอกว่าเป็นคู่ไหน · แผนที่วาดเส้นพวกนั้นแยกออกมาเป็นชั้นของตัวเอง
+ *
+ * **ไม่ใช่การจับผิดใคร** — `health` เขียนกำกับไว้เองว่าเป็นข้อสังเกตไม่ใช่คำตัดสิน
+ * และการที่คนอื่นหยิบงานไปทำแทนเป็นเรื่องปกติของโต๊ะนี้ · ที่วาดคือข้อเท็จจริงว่า
+ * ระเบียนระบุชื่อหนึ่งแต่มืออีกชื่อหนึ่งลงมือ ซึ่งคนอ่านย้อนหลังต้องแยกออก
+ *
+ * ไม่มี JavaScript · SVG คำนวณพิกัดที่ server เหมือนหน้าอื่นในไฟล์นี้
+ */
+
+const MAP_R = 268;
+const MAP_PAD = 196;
+const MAP_SIZE = (MAP_R + MAP_PAD) * 2;
+const MAP_C = MAP_SIZE / 2;
+
+const MAP_STYLE = `
+body.map { max-width: 1060px; }
+.msvg { display: block; margin: 0 auto; }
+.msvg text { font: 11px ui-sans-serif, "Noto Sans Thai", sans-serif; fill: var(--fg); }
+.msvg .lk { fill: none; stroke: var(--fg); stroke-linecap: round; opacity: .42; }
+.msvg .lk.fk { stroke: var(--muted); stroke-dasharray: 5 4; opacity: .95; }
+.msvg .nd { fill: var(--fg); }
+.msvg .nd.sink { fill: var(--bg); stroke: var(--fg); stroke-width: 1.3; }
+.msvg .nl { font-size: 10.5px; }
+.msvg .nl.q { fill: var(--muted); }
+.mrow { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 12px;
+  font-size: 13px; align-items: baseline; }
+.mrow .num { font-variant-numeric: tabular-nums; color: var(--muted); }
+.mrow .hd { font-weight: 600; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+`;
+
+/** ชื่อยาวทุกชื่อขึ้นต้นด้วยเจ้าของบัญชีเดียวกัน — ตัดออกเพื่อให้ป้ายอ่านได้ */
+function shortName(name: string): string {
+  return name.replace(/^monthop-gmail\//, "").replace(/^willpower-institute\//, "wi/");
+}
+
+function mapPoint(deg: number, r: number): { x: number; y: number } {
+  const rad = (deg * Math.PI) / 180;
+  return { x: MAP_C + r * Math.cos(rad), y: MAP_C + r * Math.sin(rad) };
+}
+
+async function renderHandoffMap(env: Env, workspace: string): Promise<Response> {
+  const map = await readHandoffMap(env.DB, workspace);
+
+  // โหนดเรียงตามจำนวนใบที่เกี่ยวข้อง ให้ชื่อที่ยุ่งที่สุดอยู่ติดกันและเส้นสั้น
+  const deg = new Map<string, { out: number; in: number; name: string }>();
+  const touch = (name: string, dir: "out" | "in", n: number) => {
+    const key = name.toLowerCase();
+    const cur = deg.get(key) ?? { out: 0, in: 0, name };
+    cur[dir] += n;
+    deg.set(key, cur);
+  };
+  for (const e of map.edges) {
+    touch(e.from, "out", e.n);
+    touch(e.to, "in", e.n);
+  }
+  for (const f of map.forks) touch(f.actual, "in", 0);
+
+  const order = [...deg.entries()].sort(
+    (a, b) => b[1].out + b[1].in - (a[1].out + a[1].in) || a[0].localeCompare(b[0]),
+  );
+  const angleOf = new Map<string, number>();
+  order.forEach(([key], i) => angleOf.set(key, -90 + (360 * i) / Math.max(order.length, 1)));
+
+  const at = (name: string) => angleOf.get(name.toLowerCase());
+
+  const maxN = Math.max(...map.edges.map((e) => e.n), 1);
+
+  /** เส้นโค้งเข้าหากลางวง — เส้นตรงทั้งหมดจะทับกันเป็นพงรกตรงกลาง */
+  const chord = (a: number, b: number, width: number, cls: string, label: string) => {
+    const p = mapPoint(a, MAP_R);
+    const q = mapPoint(b, MAP_R);
+    // ยิ่งสองชื่ออยู่ไกลกันบนวง ยิ่งดึงเส้นเข้าหากลางมาก
+    const spread = Math.abs(((a - b + 540) % 360) - 180) / 180;
+    const pull = 0.12 + 0.62 * (1 - spread);
+    const cx = MAP_C + (((p.x + q.x) / 2 - MAP_C) * pull);
+    const cy = MAP_C + (((p.y + q.y) / 2 - MAP_C) * pull);
+    return (
+      `<path class="lk ${cls}" d="M${p.x.toFixed(1)} ${p.y.toFixed(1)} ` +
+      `Q${cx.toFixed(1)} ${cy.toFixed(1)} ${q.x.toFixed(1)} ${q.y.toFixed(1)}" ` +
+      `stroke-width="${width.toFixed(2)}"><title>${esc(label)}</title></path>`
+    );
+  };
+
+  const links = map.edges
+    .map((e) => {
+      const a = at(e.from);
+      const b = at(e.to);
+      if (a === undefined || b === undefined) return "";
+      const w = 0.9 + 4.6 * Math.sqrt(e.n / maxN);
+      const label =
+        `${e.from} → ${e.to} · ${e.n} ใบ` +
+        (e.pending ? ` · ยังไม่มีใครรับ ${e.pending}` : "") +
+        (e.forked ? ` · ผู้รับไม่ตรงชื่อ ${e.forked}` : "");
+      return chord(a, b, w, "", label);
+    })
+    .join("");
+
+  // ชั้นของเส้นที่ผู้กดรับไม่ใช่ชื่อที่จ่าหน้าถึง — จากชื่อบนใบ ไปยังมือที่ลงจริง
+  const forkLinks = map.forks
+    .map((f) => {
+      const a = at(f.named);
+      const b = at(f.actual);
+      if (a === undefined || b === undefined || a === b) return "";
+      return chord(
+        a,
+        b,
+        1.1 + 2.2 * Math.sqrt(f.n / maxN),
+        "fk",
+        `ใบจ่าหน้าถึง ${f.named} แต่ ${f.actual} กดรับ · ${f.n} ใบ`,
+      );
+    })
+    .join("");
+
+  const nodes = order
+    .map(([key, info]) => {
+      const a = angleOf.get(key)!;
+      const p = mapPoint(a, MAP_R);
+      const t = mapPoint(a, MAP_R + 12);
+      const flip = a > 90 || a < -90;
+      const anchor = flip ? "end" : "start";
+      const rot = flip ? a + 180 : a;
+      // ชื่อที่รับงานแต่ไม่เคยส่งงานให้ใคร วาดเป็นวงกลวง — ปลายทางของสายงาน
+      const sink = info.out === 0 ? " sink" : "";
+      const q = info.in === 0 && info.out === 0 ? " q" : "";
+      return (
+        `<g><circle class="nd${sink}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" ` +
+        `r="${(2.6 + Math.min(4.4, Math.sqrt(info.out + info.in) / 2.4)).toFixed(2)}">` +
+        `<title>${esc(info.name)} · ส่งออก ${info.out} · รับเข้า ${info.in}</title></circle>` +
+        `<text class="nl${q}" x="${t.x.toFixed(1)}" y="${t.y.toFixed(1)}" ` +
+        `text-anchor="${anchor}" dominant-baseline="middle" ` +
+        `transform="rotate(${rot.toFixed(2)} ${t.x.toFixed(1)} ${t.y.toFixed(1)})">` +
+        `${esc(shortName(info.name))}</text></g>`
+      );
+    })
+    .join("");
+
+  const svg =
+    `<svg class="msvg" width="${MAP_SIZE}" height="${MAP_SIZE}" ` +
+    `viewBox="0 0 ${MAP_SIZE} ${MAP_SIZE}" role="img" ` +
+    `aria-label="แผนที่การส่งงานระหว่างทีม"><g>${links}${forkLinks}${nodes}</g></svg>`;
+
+  const sinks = order.filter(([, i]) => i.out === 0).length;
+  const forkTotal = map.forks.reduce((n, f) => n + f.n, 0);
+  const pendingTotal = map.edges.reduce((n, e) => n + e.pending, 0);
+
+  const top = map.edges
+    .slice(0, 12)
+    .map(
+      (e) =>
+        `<span>${esc(shortName(e.from))} → ${esc(shortName(e.to))}</span>` +
+        `<span class="num">${e.n} ใบ</span>` +
+        `<span class="num">${e.pending ? `รอรับ ${e.pending}` : ""}</span>`,
+    )
+    .join("");
+
+  const forkRows = map.forks
+    .map(
+      (f) =>
+        `<span>ใบจ่าหน้าถึง <b>${esc(shortName(f.named))}</b> · ` +
+        `${esc(shortName(f.actual))} กดรับ</span>` +
+        `<span class="num">${f.n} ใบ</span><span></span>`,
+    )
+    .join("");
+
+  const body =
+    `<div class="top"><h1>แผนที่การส่งงาน ${esc(workspace)}</h1>` +
+    `<span class="muted">contract <b title="${esc(CONTRACT_TITLE)}">${CONTRACT_VERSION}</b></span></div>` +
+    `<div class="muted">จุดหนึ่งจุดคือหนึ่งชื่อ · เส้นหนาตามจำนวนใบที่ส่งกัน · ` +
+    `<b>เส้นประคือใบที่ผู้กดรับไม่ใช่ชื่อที่จ่าหน้าถึง</b> · วงกลวงคือชื่อที่รับงาน` +
+    `แต่ไม่เคยส่งงานให้ใคร · เอาเมาส์ชี้จุดหรือเส้นเพื่อดูตัวเลขและชื่อเต็ม</div>` +
+    `<div class="bar"><span>ใบฝากงาน <b>${map.total}</b></span>` +
+    `<span>ชื่อในแผนที่ <b>${order.length}</b></span>` +
+    `<span>คู่ที่ส่งกัน <b>${map.edges.length}</b></span>` +
+    `<span>ผู้รับไม่ตรงชื่อ <b>${forkTotal}</b></span>` +
+    `<span>ยังไม่มีใครรับ <b>${pendingTotal}</b></span>` +
+    `<span>ปลายทางของสายงาน <b>${sinks}</b></span>` +
+    `<span><a href="${VIEW_ROUTE}">← หน้ารายการ</a></span></div>` +
+    `<div class="gwrap">${svg}</div>` +
+    `<h2 class="section">คู่ที่ส่งงานกันบ่อยที่สุด</h2>` +
+    `<div class="mrow"><span class="hd">คู่</span><span class="hd num">ใบ</span>` +
+    `<span class="hd num">รอรับ</span>${top}</div>` +
+    (forkRows
+      ? `<h2 class="section">ใบที่ผู้กดรับไม่ใช่ชื่อที่จ่าหน้าถึง</h2>` +
+        `<div class="muted">เป็นข้อสังเกต ไม่ใช่คำตัดสิน — การที่คนอื่นหยิบงานไปทำแทน` +
+        `เป็นเรื่องปกติของโต๊ะนี้ · ที่บันทึกคือข้อเท็จจริงว่าระเบียนระบุชื่อหนึ่ง` +
+        `แต่มืออีกชื่อหนึ่งลงมือ ซึ่งคนอ่านย้อนหลังต้องแยกออก</div>` +
+        `<div class="mrow">${forkRows}</div>`
+      : "") +
+    `<div class="note">${TZ_NOTE} · หน้านี้อ่านอย่างเดียวและไม่มี JavaScript · ` +
+    `ยอดทั้งหมดรวมใน SQL จึงนับครบทุกใบ ไม่ใช่เฉพาะหน้าแรกของ <code>get_handoffs</code> ` +
+    `ที่มีเพดาน 200 แถว · จับคู่ชื่อไม่สนตัวพิมพ์ ตาม <code>dec-bcb9854f</code> · ` +
+    `ชื่อที่ขึ้นต้นด้วยเจ้าของบัญชีถูกตัดคำนำหน้าให้ป้ายอ่านได้ ชื่อเต็มอยู่ในคำแนะนำเมื่อชี้</div>`;
+
+  return page(`แผนที่การส่งงาน ${workspace}`, body, GRAPH_STYLE + MAP_STYLE, "graph map");
+}
+
 /* ── กราฟความรู้ของโต๊ะ ─────────────────────────────────────────────────────
  *
  * **ไม่ใช่กราฟของระเบียนทุกใบ เป็นกราฟของชนิดข้อมูล** และนั่นเป็นการตัดสินใจ
@@ -1098,6 +1305,7 @@ export async function handleView(request: Request, env: Env): Promise<Response |
     }
     if (id === CITY_PATH) return await renderCity(env, workspace);
     if (id === GRAPH_PATH) return await renderGraph(env, workspace);
+    if (id === MAP_PATH) return await renderHandoffMap(env, workspace);
     if (id) return await renderDiscussion(env, id, workspace);
 
     const [context, open, rules] = await Promise.all([

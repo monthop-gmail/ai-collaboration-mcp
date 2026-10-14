@@ -1152,3 +1152,166 @@ describe("กราฟความรู้", () => {
     for (const [rel] of MISSING) expect(html).toContain(rel);
   });
 });
+
+/**
+ * แผนที่การส่งงาน
+ *
+ * ข้อที่ต้องล็อกหนักที่สุดคือ **ยอดต้องนับครบทุกใบ** · ใบฝากงานมี 460 กว่าใบบนของจริง
+ * และเพดานของ `get_handoffs` คือ 200 แถวต่อหน้า · แผนที่ที่รวมยอดฝั่งผู้เรียกจะขาด
+ * ไปครึ่งโดยหน้าตายังเหมือนแผนที่ ซึ่งเป็นความผิดพลาดที่มองด้วยตาไม่เห็น
+ */
+describe("แผนที่การส่งงาน", () => {
+  const MAP = "/view/handoffs";
+
+  async function hmap() {
+    const res = await handleView(get(MAP, { authorization: `Bearer ${TOKEN}` }), withToken(TOKEN));
+    return { res: res!, html: await res!.text() };
+  }
+
+  /** ใบฝากงานหนึ่งใบต่อหนึ่ง task — สร้างหลายใบด้วย task หลายใบ */
+  async function handoffs(pairs: Array<[string, string]>) {
+    const made: string[] = [];
+    for (const [from, to] of pairs) {
+      const t = await createTask(env.DB, WS, `งานของ ${to}`, "", { client: `c-${from}`, name: from });
+      const h = await createHandoff(env.DB, t.id, to, "ฝากด้วย", {
+        client: `c-${from}`,
+        name: from,
+      });
+      made.push(h.handoff.id);
+    }
+    return made;
+  }
+
+  it("ไม่มีรหัสได้ 401", async () => {
+    expect((await handleView(get(MAP), withToken(TOKEN)))!.status).toBe(401);
+  });
+
+  it("ไม่มี JavaScript และไม่ดึง asset จากที่อื่น", async () => {
+    await handoffs([["ChatGPT", "Codex"]]);
+    const { html } = await hmap();
+    expect(html).not.toMatch(/<script/i);
+    expect(html).not.toMatch(/https?:\/\//i);
+  });
+
+  /**
+   * **ด่านสำคัญที่สุดของหน้านี้** — ยอดต้องมาจากการรวมใน SQL ไม่ใช่หน้าแรกของ tool
+   *
+   * สร้างใบมากกว่าเพดาน 200 แถวต่อหน้า แล้วยอดต้องเท่าของจริง ไม่ใช่ 200
+   */
+  it("นับครบทุกใบ แม้เกินเพดาน 200 แถวต่อหน้าของ get_handoffs", async () => {
+    const pairs: Array<[string, string]> = [];
+    for (let i = 0; i < 205; i++) pairs.push(["ChatGPT", i % 2 === 0 ? "Codex" : "Cursor"]);
+    await handoffs(pairs);
+
+    const { html } = await hmap();
+    expect(html).toContain("ใบฝากงาน <b>205</b>");
+    // สองคู่ ไม่ใช่สองร้อยคู่ — ยอดถูกรวมต่อคู่ชื่อ
+    expect(html).toContain("คู่ที่ส่งกัน <b>2</b>");
+    expect(html).toContain("103 ใบ");
+    expect(html).toContain("102 ใบ");
+  });
+
+  /** ทีมเดียวกันที่สะกดคนละตัวพิมพ์ต้องเป็นโหนดเดียว ตาม dec-bcb9854f */
+  it("จับคู่ชื่อไม่สนตัวพิมพ์ใหญ่เล็ก", async () => {
+    await handoffs([
+      ["ChatGPT", "Codex"],
+      ["chatgpt", "CODEX"],
+      ["ChatGPT", "codex"],
+    ]);
+    const { html } = await hmap();
+
+    expect(html).toContain("คู่ที่ส่งกัน <b>1</b>");
+    expect(html).toContain("ชื่อในแผนที่ <b>2</b>");
+    expect(html).toContain("3 ใบ");
+  });
+
+  /**
+   * ใบที่ผู้กดรับไม่ใช่ชื่อที่จ่าหน้าถึง — ของที่ `health.delegated` รายงานเป็นยอดเดียว
+   * แต่ไม่บอกว่าคู่ไหน · หน้านี้ต้องบอกคู่ และต้องไม่อ่านเหมือนการจับผิด
+   */
+  it("แยกใบที่ผู้กดรับไม่ตรงชื่อออกมาเป็นชั้นของตัวเอง", async () => {
+    const [id] = await handoffs([["ChatGPT", "Codex"]]);
+    await acceptHandoff(env.DB, id!, claude);
+
+    const { html } = await hmap();
+    expect(html).toContain("ผู้รับไม่ตรงชื่อ <b>1</b>");
+    expect(html).toContain("Codex");
+    expect(html).toContain("Claude");
+    expect(html).toMatch(/class="lk fk"/);
+    // ต้องเขียนกำกับว่าเป็นข้อสังเกต ไม่ใช่คำตัดสิน
+    expect(html).toContain("ไม่ใช่คำตัดสิน");
+  });
+
+  it("ไม่มีใบที่ผู้รับไม่ตรงชื่อ ก็ไม่ต้องมีชั้นนั้น", async () => {
+    const [id] = await handoffs([["ChatGPT", "Codex"]]);
+    await acceptHandoff(env.DB, id!, { client: "c-codex", name: "Codex" });
+
+    const { html } = await hmap();
+    expect(html).toContain("ผู้รับไม่ตรงชื่อ <b>0</b>");
+    expect(html).not.toMatch(/class="lk fk"/);
+  });
+
+  /** ชื่อที่รับงานแต่ไม่เคยส่งงานให้ใคร คือปลายทางของสายงาน — วาดต่างจากชื่ออื่น */
+  it("ชี้ชื่อที่รับงานแต่ไม่เคยส่งงานให้ใคร", async () => {
+    await handoffs([["ChatGPT", "Codex"]]);
+    const { html } = await hmap();
+
+    // ChatGPT ส่งออก · Codex รับเข้าอย่างเดียว
+    expect(html).toContain("ปลายทางของสายงาน <b>1</b>");
+    expect(html).toMatch(/class="nd sink"/);
+  });
+
+  it("นับใบที่ยังไม่มีใครรับ", async () => {
+    const ids = await handoffs([
+      ["ChatGPT", "Codex"],
+      ["ChatGPT", "Cursor"],
+    ]);
+    await acceptHandoff(env.DB, ids[0]!, { client: "c-codex", name: "Codex" });
+
+    const { html } = await hmap();
+    expect(html).toContain("ยังไม่มีใครรับ <b>1</b>");
+  });
+
+  it("ชื่อยาวถูกตัดคำนำหน้าให้ป้ายอ่านได้ แต่ชื่อเต็มยังอยู่ในคำแนะนำ", async () => {
+    await handoffs([["monthop-gmail/ai-collaboration-mcp", "monthop-gmail/trueforge"]]);
+    const { html } = await hmap();
+
+    expect(html).toContain(">ai-collaboration-mcp</text>");
+    expect(html).toContain("monthop-gmail/ai-collaboration-mcp · ส่งออก");
+  });
+
+  it("หน้ารายการมีทางเข้าแผนที่", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const res = await handleView(
+      get("/view", { authorization: `Bearer ${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    expect(await res!.text()).toContain("/view/handoffs?ws=ws-001");
+  });
+
+  /**
+   * ยอดบนแถบต้องมาจากการนับจริง ไม่ใช่ผลบวกของคู่ที่ยกมาแสดง
+   *
+   * หน้านี้แสดงคู่ที่บ่อยที่สุดสิบสองคู่ · ของจริงมีห้าสิบกว่าคู่ · มิวแทนต์ที่เอาผลบวก
+   * ของคู่ที่แสดงมาเป็นยอดรวม **รอดจากฉากที่มีไม่ถึงสิบสองคู่** แล้วจะผิดบน production
+   * อย่างเดียว ซึ่งเป็นรูปที่ `CLAUDE.md` เขียนไว้ว่าด่านไม่ได้อยู่ตรงที่มันพัง
+   */
+  it("ยอดรวมมาจากการนับจริง ไม่ใช่ผลบวกของคู่ที่ยกมาแสดง", async () => {
+    const pairs: Array<[string, string]> = [];
+    for (let i = 0; i < 14; i++) pairs.push(["ChatGPT", `ทีม-${i}`]);
+    await handoffs(pairs);
+
+    const { html } = await hmap();
+    expect(html).toContain("ใบฝากงาน <b>14</b>");
+    expect(html).toContain("คู่ที่ส่งกัน <b>14</b>");
+    // ตารางยกมาแค่สิบสองคู่ — ยอดบนแถบต้องไม่ใช่ 12
+    expect((html.match(/<span class="num">1 ใบ<\/span>/g) ?? []).length).toBe(12);
+  });
+
+  it("โต๊ะที่ยังไม่มีใบฝากงานไม่พัง", async () => {
+    const { res, html } = await hmap();
+    expect(res.status).toBe(200);
+    expect(html).toContain("ใบฝากงาน <b>0</b>");
+    expect(html).toContain("ชื่อในแผนที่ <b>0</b>");
+  });
+});
