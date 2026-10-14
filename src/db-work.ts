@@ -650,6 +650,103 @@ export async function readItemTotals(
 }
 
 /**
+ * ยอดของกราฟความรู้ — จำนวนระเบียนต่อชนิด และจำนวนครั้งที่แต่ละเส้นถูกใช้จริง
+ *
+ * **แยกเป็นสี่คิวรีเพราะ D1 จำกัดจำนวนท่อนใน compound SELECT ไว้ต่ำ** — รวม `UNION`
+ * ได้หกท่อน และพังตอนรันไม่ใช่ตอน build · ยอดที่ต้องใช้มีสิบสามค่า เขียนรวมก้อนเดียว
+ * จะผ่าน typecheck ผ่าน build แล้วพังบนของจริง ซึ่งเป็นรูปที่ `CLAUDE.md` เขียนไว้ทั้งข้อ
+ *
+ * ทุกค่าเป็นการนับ **ของที่มีจริงในฐาน** ไม่ใช่ของที่สัญญาบอกว่าควรมี — เส้นที่ใช้ศูนย์ครั้ง
+ * ต้องอ่านออกว่าศูนย์ ไม่ใช่หายไปจากกราฟ
+ */
+export interface GraphStats {
+  nodes: Record<string, number>;
+  /** จำนวนแถวที่ฟิลด์ของเส้นนั้นมีค่า — คู่กับ `rows` เพื่อบอกว่าใช้ไปกี่ส่วนของทั้งหมด */
+  edges: Record<string, { used: number; rows: number }>;
+}
+
+export async function readGraphStats(
+  db: D1Database,
+  workspaceId: string,
+): Promise<GraphStats> {
+  await requireWorkspace(db, workspaceId);
+
+  const inWs = "WHERE workspace_id = ?1";
+  const hoJoin = "FROM handoffs h JOIN tasks t ON t.id = h.task_id WHERE t.workspace_id = ?1";
+
+  const [a, b, c, d] = await db.batch<{ k: string; n: number }>([
+    db
+      .prepare(
+        `SELECT 'discussion' AS k, COUNT(*) AS n FROM discussions ${inWs}
+         UNION ALL SELECT 'task', COUNT(*) FROM tasks ${inWs}
+         UNION ALL SELECT 'decision', COUNT(*) FROM decisions ${inWs}
+         UNION ALL SELECT 'plan', COUNT(*) FROM plans ${inWs}
+         UNION ALL SELECT 'handoff', COUNT(*) ${hoJoin}`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT 'message' AS k, COUNT(*) AS n
+           FROM messages m JOIN discussions d ON d.id = m.discussion_id
+          WHERE d.workspace_id = ?1
+         UNION ALL SELECT 'participant', COUNT(DISTINCT m.author_name)
+           FROM messages m JOIN discussions d ON d.id = m.discussion_id
+          WHERE d.workspace_id = ?1`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT 'task.discussion_id' AS k, COUNT(discussion_id) AS n FROM tasks ${inWs}
+         UNION ALL SELECT 'task.result_ref', COUNT(result_ref) FROM tasks ${inWs}
+         UNION ALL SELECT 'decision.discussion_id', COUNT(discussion_id) FROM decisions ${inWs}
+         UNION ALL SELECT 'decision.superseded_by', COUNT(superseded_by) FROM decisions ${inWs}
+         UNION ALL SELECT 'handoff.task_id', COUNT(h.task_id) ${hoJoin}`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT 'plan.discussion_id' AS k, COUNT(discussion_id) AS n FROM plans ${inWs}
+         UNION ALL SELECT 'plan.decision_id', COUNT(decision_id) FROM plans ${inWs}
+         UNION ALL SELECT 'plan.supersedes', COUNT(supersedes) FROM plans ${inWs}`,
+      )
+      .bind(workspaceId),
+  ]);
+
+  const flat = new Map<string, number>();
+  for (const part of [a, b, c, d]) {
+    for (const row of part.results) flat.set(row.k, row.n);
+  }
+
+  const n = (k: string) => flat.get(k) ?? 0;
+  const edge = (field: string, ownerRows: string) => ({
+    used: n(field),
+    rows: n(ownerRows),
+  });
+
+  return {
+    nodes: {
+      discussion: n("discussion"),
+      message: n("message"),
+      participant: n("participant"),
+      task: n("task"),
+      handoff: n("handoff"),
+      decision: n("decision"),
+      plan: n("plan"),
+    },
+    edges: {
+      "task.discussion_id": edge("task.discussion_id", "task"),
+      "task.result_ref": edge("task.result_ref", "task"),
+      "decision.discussion_id": edge("decision.discussion_id", "decision"),
+      "decision.superseded_by": edge("decision.superseded_by", "decision"),
+      "handoff.task_id": edge("handoff.task_id", "handoff"),
+      "plan.discussion_id": edge("plan.discussion_id", "plan"),
+      "plan.decision_id": edge("plan.decision_id", "plan"),
+      "plan.supersedes": edge("plan.supersedes", "plan"),
+    },
+  };
+}
+
+/**
  * นับ handoff แยกตาม `state` โดย **เรียก `handoffState` ตัวเดียวกับที่หน้าจอใช้**
  *
  * ไม่เขียน `CASE` ใน SQL ซ้ำ เพราะนั่นคือนิยามที่สองที่เพี้ยนจากตัวจริงได้ทุกเมื่อ —
