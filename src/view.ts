@@ -38,6 +38,19 @@ const ITEM_LIMIT = 200;
 /** เส้นทางของหน้ารวมของค้าง แยกจากหน้ากระทู้เพราะ id ของกระทู้ขึ้นต้นด้วย dis- */
 const ITEMS_PATH = "items";
 
+/**
+ * หน้าเมืองสามมิติ — **เป็นเส้นทางย่อยของ `/view` โดยจำเป็น ไม่ใช่เพราะสวย**
+ *
+ * cookie ของหน้านี้ตั้งไว้ `Path=/view` · กติกา path-match ของ cookie คือ cookie-path
+ * ต้องเป็น prefix ของเส้นทางที่ขอ **และ** ตัวอักษรถัดไปต้องเป็น `/` · เส้นทางชื่อ
+ * `/view3D` จึง **ไม่ได้ cookie** เพราะตัวถัดจาก `/view` คือ `3`
+ *
+ * ผลถ้าตั้งชื่อแบบนั้น: คนเปิดจะถูกถามรหัสใหม่ทุกครั้งโดยไม่มีใครรู้ว่าทำไม หรือแย่กว่า
+ * คือมีคนเขียนด่านใหม่ให้หน้านั้นเอง แล้วหน้าเล่น ๆ กลายเป็นด่านที่อ่อนกว่าหน้าหลัก ·
+ * อยู่ใต้ `/view/` แล้วได้ `VIEW_TOKEN` กับ cookie มาทั้งชุดโดยไม่เขียน auth เพิ่มเลย
+ */
+const CITY_PATH = "3d";
+
 const COOKIE = "collab_view";
 
 /**
@@ -131,12 +144,13 @@ code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size:
   overflow-wrap: anywhere; }
 `;
 
-function page(title: string, body: string): Response {
+function page(title: string, body: string, extraStyle = "", bodyClass = ""): Response {
   return new Response(
     `<!doctype html><html lang="th"><head><meta charset="utf-8">` +
       `<meta name="viewport" content="width=device-width,initial-scale=1">` +
       `<meta name="robots" content="noindex,nofollow">` +
-      `<title>${esc(title)}</title><style>${STYLE}</style></head><body>${body}</body></html>`,
+      `<title>${esc(title)}</title><style>${STYLE}${extraStyle}</style></head>` +
+      `<body${bodyClass ? ` class="${bodyClass}"` : ""}>${body}</body></html>`,
     { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
   );
 }
@@ -251,6 +265,8 @@ function renderList(
       // ถ้าจะตัดทิ้งทั้งเส้น ต้องตัดที่นั่นด้วย ซึ่งทำไม่ได้เพราะ contract ห้ามลบคีย์
       `<span><a href="${items}#tasks">งานค้าง: ${tasks || "ไม่มี"}</a></span>` +
       `<span><a href="#rules"><b>${rules.length}</b> กติกาของโต๊ะ</a></span>` +
+      `<span><a href="${VIEW_ROUTE}/${CITY_PATH}?ws=${encodeURIComponent(workspace)}">` +
+      `เมืองสามมิติ →</a></span>` +
       `<span title="${esc(CONTRACT_TITLE)}">contract ${CONTRACT_VERSION}</span>` +
       deployedFrom(commitSha) +
       `</div>` +
@@ -484,6 +500,249 @@ async function renderItems(
   );
 }
 
+/* ── เมืองสามมิติ ───────────────────────────────────────────────────────────
+ *
+ * **ไม่มี JavaScript และไม่มี asset ภายนอก เหมือนทุกหน้าในไฟล์นี้**
+ *
+ * สามมิติทั้งหมดเป็น CSS transform · การเคลื่อนไหวทั้งหมดเป็น `@keyframes` ·
+ * ตัวละครที่เดินไปเดินมาใช้ `animation-direction: alternate` และเด้งด้วย element
+ * ซ้อนอีกชั้น เพราะ element เดียวมี `transform` ได้ชุดเดียว จะเดินและเด้งพร้อมกันไม่ได้
+ *
+ * **เหตุที่ไม่ใช้ Three.js ไม่ใช่เพราะไลบรารีไม่ดี** — เจ้าของงานเสนอมาเองและมันเหมาะ
+ * กับงานที่ต้องมีกล้อง เงา หรือการคลิกเลือกวัตถุ · ที่ไม่เอารอบนี้เพราะราคาของมันตกที่
+ * worker ตัวเดียวกับที่ทุกทีมใช้ประสานงาน
+ *
+ *   ดึงจาก CDN         หน้าที่มีเนื้อกระทู้จริงจะบอกบุคคลที่สามว่าใครเปิดดูเมื่อไร
+ *                      และเปิดทาง supply chain เข้ามาตอน runtime
+ *   ฝังลง bundle       bundle วันนี้วัดได้ 274 KB gzip · ของแบบนั้นจะโตขึ้นหลายเท่า
+ *                      เพื่อหน้าเล่น ๆ หน้าเดียว
+ *   static assets      ต้องแก้ routing ของ worker ที่ `/mcp` อยู่ด้วย — ความเสี่ยงที่
+ *                      จ่ายเพื่อของเล่นแล้วกระทบทุกทีมถ้าตั้งผิด
+ *
+ * CSS ทำ "ดุ๊กดิ๊ก เดินไปเดินมา" ได้ครบโดยไม่เพิ่มพื้นผิวอะไรเลย · ถ้าวันหนึ่งอยากได้
+ * กล้องหมุนตามเมาส์หรือคลิกตึกแล้วเด้งไปกระทู้ ตอนนั้นค่อยคุยเรื่อง Three.js จริงจัง
+ * เพราะเป็นงานที่ CSS ทำไม่ได้แล้ว
+ */
+
+/** เพดานของหน้านี้สูงกว่าหน้ารายการ เพราะเมืองที่ขาดตึกไปครึ่งอ่านผิดทั้งเมือง */
+const CITY_LIMIT = 400;
+
+/** ระยะห่างของตึกต่อหนึ่งวันบนแกนเวลา */
+const DAY_PITCH = 22;
+/** ระยะห่างของตึกที่เปิดวันเดียวกัน — กองลึกเข้าไปในฉาก */
+const STACK_PITCH = 24;
+const FOOTPRINT = 16;
+
+/** จำนวนตัวละครที่ปล่อยเดิน — มากกว่านี้เมืองรกและแยกใครเป็นใครไม่ออก */
+const WALKERS = 10;
+
+const CITY_STYLE = `
+body.city { max-width: 1180px; }
+.stagewrap { overflow-x: auto; overflow-y: hidden; margin: 14px 0 6px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.stage { perspective: 1500px; perspective-origin: 50% 38%; height: 560px; }
+.town { position: relative; width: var(--town-w); height: var(--town-d); margin: 96px auto 0;
+  transform-style: preserve-3d; transform: rotateX(60deg) rotateZ(-8deg);
+  animation: rock 30s ease-in-out infinite alternate; }
+@keyframes rock {
+  from { transform: rotateX(60deg) rotateZ(-15deg); }
+  to   { transform: rotateX(60deg) rotateZ(15deg); }
+}
+.town:hover { animation-play-state: paused; }
+#iso:target   ~ .stagewrap .town { animation: none; transform: rotateX(60deg) rotateZ(-8deg); }
+#front:target ~ .stagewrap .town { animation: none; transform: rotateX(84deg) rotateZ(0deg); }
+#top:target   ~ .stagewrap .town { animation: none; transform: rotateX(6deg)  rotateZ(0deg); }
+.ground { position: absolute; inset: 0; border: 1px solid var(--line);
+  background-image: linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: ${DAY_PITCH}px ${STACK_PITCH}px; opacity: .35; }
+
+/* กล่องสามมิติหนึ่งใบ — ฐานจัตุรัส var(--w) สูง var(--h) ยืนบนระนาบพื้น (z = 0) */
+.bx { position: absolute; width: var(--w); height: var(--w); transform-style: preserve-3d; }
+.bx > i { position: absolute; display: block; background: var(--c); }
+.bx > .r  { left: 0; top: 0; width: var(--w); height: var(--w);
+  transform: translateZ(var(--h)); filter: brightness(1.32); }
+.bx > .n  { left: 0; top: 0; width: var(--w); height: var(--h);
+  transform-origin: 50% 0; transform: rotateX(90deg); filter: brightness(.8); }
+.bx > .s  { left: 0; top: var(--w); width: var(--w); height: var(--h);
+  transform-origin: 50% 0; transform: rotateX(90deg); filter: brightness(1.04); }
+.bx > .wl { left: 0; top: 0; width: var(--h); height: var(--w);
+  transform-origin: 0 0; transform: rotateY(-90deg); filter: brightness(.64); }
+.bx > .el { left: var(--w); top: 0; width: var(--h); height: var(--w);
+  transform-origin: 0 0; transform: rotateY(-90deg); filter: brightness(.92); }
+.bld:hover > i { filter: brightness(1.6); }
+
+/* ตัวละคร — เลนหนึ่งเลนต่อหนึ่งทีม เดินกลับไปกลับมาตามแกนเวลา */
+.lane { position: absolute; left: 0; top: var(--ly); width: 100%; height: 0;
+  transform-style: preserve-3d; }
+.wk { position: absolute; transform-style: preserve-3d;
+  animation: walk var(--dur) ease-in-out infinite alternate var(--dl); }
+@keyframes walk { from { transform: translateX(var(--x0)); } to { transform: translateX(var(--x1)); } }
+.bb { position: absolute; transform-style: preserve-3d;
+  animation: bob .55s ease-in-out infinite alternate var(--dl); }
+@keyframes bob { from { transform: translateZ(0); } to { transform: translateZ(4px); } }
+
+.cam { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 0 0 2px; }
+.cam a { text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.key { display: flex; gap: 6px 18px; flex-wrap: wrap; align-items: center;
+  font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px;
+  vertical-align: -1px; margin-right: 5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .town, .wk, .bb { animation: none; }
+}
+`;
+
+/** อายุของความเคลื่อนไหวล่าสุด เป็นวัน — ใช้ทั้งกำหนดสีและเรียงความสนใจ */
+function ageInDays(iso: string | null, now: number): number {
+  if (!iso) return 999;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? 999 : Math.max(0, (now - t) / 86_400_000);
+}
+
+/**
+ * สีของตึกจากอายุ — สว่างอมเขียวคือขยับวันนี้ ทึบอมน้ำเงินคือเงียบไปแล้ว
+ *
+ * ไล่ต่อเนื่องไม่ใช่แบ่งขั้น เพราะเส้นแบ่งที่ไม่มีใครตกลงจะถูกอ่านเป็นความหมาย
+ */
+function ageColor(days: number): string {
+  const d = Math.min(days, 40);
+  return `hsl(${Math.round(166 + d * 1.5)} 44% ${Math.round(58 - d * 0.75)}%)`;
+}
+
+/** กล่องหนึ่งใบ — ห้าหน้าเสมอ ไม่ลดหน้าตามมุมกล้อง เพราะฉากหมุนได้ */
+function box(cls: string, style: string, titleAttr: string): string {
+  return (
+    `<div class="bx ${cls}" style="${style}"${titleAttr}>` +
+    `<i class="n"></i><i class="s"></i><i class="wl"></i><i class="el"></i><i class="r"></i></div>`
+  );
+}
+
+async function renderCity(env: Env, workspace: string): Promise<Response> {
+  const context = await readWorkspaceContext(env.DB, workspace, CITY_LIMIT);
+  const rows = context.discussions;
+  const now = Date.now();
+
+  if (rows.length === 0) {
+    return page(
+      "เมืองว่าง",
+      `<h1>ยังไม่มีกระทู้ให้สร้างเมือง</h1>` +
+        `<p class="muted"><a href="${VIEW_ROUTE}">← กลับหน้ารายการ</a></p>`,
+    );
+  }
+
+  // แกนเวลาเริ่มจากกระทู้ที่เปิดก่อนสุด เพื่อให้ช่วงที่โต๊ะคึกอ่านออกเป็นกลุ่มตึก
+  const dayOf = (iso: string) => Math.floor(new Date(iso).getTime() / 86_400_000);
+  const day0 = Math.min(...rows.map((r) => dayOf(r.created_at)));
+  const maxMsg = Math.max(...rows.map((r) => r.message_count), 1);
+  const lastDay = Math.max(...rows.map((r) => dayOf(r.created_at)));
+
+  const stack = new Map<number, number>();
+  const buildings: string[] = [];
+  for (const r of rows) {
+    const d = dayOf(r.created_at) - day0;
+    const n = stack.get(d) ?? 0;
+    stack.set(d, n + 1);
+    // รากที่สองไม่ใช่เส้นตรง — กระทู้ 110 ข้อความไม่ควรกดกระทู้ที่มี 3 ข้อความให้หายไป
+    const h = Math.round(10 + 78 * Math.sqrt(r.message_count / maxMsg));
+    const age = ageInDays(r.last_activity ?? r.created_at, now);
+    const style =
+      `left:${24 + d * DAY_PITCH}px;top:${20 + n * STACK_PITCH}px;` +
+      `--w:${FOOTPRINT}px;--h:${h}px;--c:${ageColor(age)}`;
+    const label =
+      `${r.title} · ${r.message_count} ข้อความ · ` +
+      `ขยับล่าสุด ${when(r.last_activity ?? r.created_at)}` +
+      (r.last_author ? ` โดย ${r.last_author}` : "");
+    buildings.push(box("bld", style, ` title="${esc(label)}"`));
+  }
+
+  // ตัวละคร = ทีมที่ "โพสต์จริง" ไม่ใช่ทีมที่ถูกเอ่ยถึง — นับจาก participants ของกระทู้
+  const seen = new Map<string, { n: number; fresh: number }>();
+  for (const r of rows) {
+    const age = ageInDays(r.last_activity ?? r.created_at, now);
+    for (const p of r.participants) {
+      const cur = seen.get(p) ?? { n: 0, fresh: 999 };
+      seen.set(p, { n: cur.n + 1, fresh: Math.min(cur.fresh, age) });
+    }
+  }
+  const cast = [...seen.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, WALKERS);
+
+  const townW = 48 + (lastDay - day0) * DAY_PITCH + FOOTPRINT;
+  const townD = 40 + Math.max(...stack.values()) * STACK_PITCH;
+
+  const walkers = cast.map(([name, info], i) => {
+    const hue = (i * 47 + 12) % 360;
+    const style =
+      `--w:11px;--h:13px;--c:hsl(${hue} 52% 54%)` as string;
+    const head = `--w:8px;--h:8px;--c:hsl(${hue} 52% 68%)`;
+    const label = `${name} · โพสต์ใน ${info.n} กระทู้ · ขยับล่าสุด ${
+      info.fresh > 40 ? "เกินเดือน" : `${Math.round(info.fresh)} วันก่อน`
+    }`;
+    // เดินตามแกนเวลา เริ่มเหลื่อมกันทั้งตำแหน่งและจังหวะ ไม่ให้เดินพร้อมกันเป็นแถว
+    //
+    // คุมปลายทางให้อยู่ในเมืองเสมอ — โต๊ะที่มีกระทู้น้อยทำให้เมืองแคบกว่าระยะเดินที่
+    // คำนวณจากดัชนี แล้วตัวละครจะเดินถอยหลังออกนอกฉากโดยไม่มีอะไรฟ้อง
+    const x0 = Math.min(20 + i * 23, Math.max(8, townW - 56));
+    const x1 = Math.max(x0 + 18, townW - 44 - i * 13);
+    return (
+      `<div class="lane" style="--ly:${18 + i * 11}px">` +
+      `<div class="wk" style="--x0:${x0}px;--x1:${x1}px;` +
+      `--dur:${16 + i * 2.5}s;--dl:-${i * 1.7}s">` +
+      `<div class="bb" style="--dl:-${(i % 5) * 0.11}s">` +
+      box("fig", style, ` title="${esc(label)}"`) +
+      `<div class="bx" style="${head};top:1px;left:1px;transform:translateZ(13px)" aria-hidden="true">` +
+      `<i class="n"></i><i class="s"></i><i class="wl"></i><i class="el"></i><i class="r"></i></div>` +
+      `</div></div></div>`
+    );
+  });
+
+  const busiest = [...rows]
+    .sort((a, b) => b.message_count - a.message_count)
+    .slice(0, 5)
+    .map(
+      (r) =>
+        `<div class="item"><h2><a href="${VIEW_ROUTE}/${esc(r.id)}">${esc(r.title)}</a></h2>` +
+        `<div class="muted">${r.message_count} ข้อความ · ขยับล่าสุด ${when(
+          r.last_activity ?? r.created_at,
+        )}${r.last_author ? ` โดย ${esc(r.last_author)}` : ""}</div></div>`,
+    )
+    .join("");
+
+  const quiet = rows.filter((r) => ageInDays(r.last_activity ?? r.created_at, now) > 7).length;
+
+  const body =
+    `<div class="top"><h1>เมืองของโต๊ะ ${esc(workspace)}</h1>` +
+    `<span class="muted">contract <b title="${esc(CONTRACT_TITLE)}">${CONTRACT_VERSION}</b></span></div>` +
+    `<div class="muted">ตึกหนึ่งใบคือหนึ่งกระทู้ · สูงตามจำนวนข้อความ · ` +
+    `สีตามอายุของความเคลื่อนไหวล่าสุด · แกนนอนคือวันที่เปิดกระทู้ · ` +
+    `ตัวที่เดินคือทีมที่โพสต์จริง เอาเมาส์ชี้เพื่อดูว่าใคร</div>` +
+    `<div class="bar"><span>กระทู้ <b>${rows.length}</b></span>` +
+    `<span>เงียบเกินเจ็ดวัน <b>${quiet}</b></span>` +
+    `<span>ทีมที่โพสต์จริง <b>${seen.size}</b></span>` +
+    `<span>ตัวที่ปล่อยเดิน <b>${cast.length}</b></span>` +
+    `<span><a href="${VIEW_ROUTE}">← หน้ารายการ</a></span></div>` +
+    `<div class="cam"><a href="#">หมุนเอง</a> <a href="#iso">มุมเฉียง</a> ` +
+    `<a href="#front">มุมระดับตา</a> <a href="#top">มุมบน</a>` +
+    `<span class="muted">· เอาเมาส์วางบนเมืองเพื่อหยุดภาพ</span></div>` +
+    `<i id="iso"></i><i id="front"></i><i id="top"></i>` +
+    `<div class="stagewrap"><div class="stage">` +
+    `<div class="town" style="--town-w:${townW}px;--town-d:${townD}px">` +
+    `<div class="ground"></div>${buildings.join("")}${walkers.join("")}` +
+    `</div></div></div>` +
+    `<div class="key"><span><span class="sw" style="background:${ageColor(0)}"></span>ขยับวันนี้</span>` +
+    `<span><span class="sw" style="background:${ageColor(7)}"></span>เจ็ดวัน</span>` +
+    `<span><span class="sw" style="background:${ageColor(20)}"></span>ยี่สิบวัน</span>` +
+    `<span><span class="sw" style="background:${ageColor(40)}"></span>เงียบเกินเดือน</span></div>` +
+    `<h2 class="section">ตึกที่สูงที่สุดห้าใบ</h2>${busiest}` +
+    `<div class="note">${TZ_NOTE} · หน้านี้อ่านอย่างเดียวและ**ไม่มี JavaScript** — ` +
+    `สามมิติทั้งหมดเป็น CSS transform ไม่มี asset จากที่อื่นเลยสักไบต์ · ` +
+    `ตัวเลขทั้งหมดมาจากกระทู้ที่หน้ารายการแสดงอยู่แล้ว ไม่มีเนื้อข้อความอยู่ในหน้านี้</div>`;
+
+  // คลาสบน body ให้หน้านี้กว้างกว่าหน้าอื่นได้ โดยไม่แก้ STYLE ที่ทุกหน้าใช้ร่วมกัน
+  return page(`เมืองของโต๊ะ ${workspace}`, body, CITY_STYLE, "city");
+}
+
 /**
  * รหัสผ่านของหน้านี้แยกจาก `MCP_AUTH_TOKEN` โดยตั้งใจ
  *
@@ -578,6 +837,7 @@ export async function handleView(request: Request, env: Env): Promise<Response |
     if (id === ITEMS_PATH) {
       return await renderItems(env, workspace, url.searchParams.get("all") === "1");
     }
+    if (id === CITY_PATH) return await renderCity(env, workspace);
     if (id) return await renderDiscussion(env, id, workspace);
 
     const [context, open, rules] = await Promise.all([
