@@ -12,6 +12,7 @@ import {
   updateTask,
 } from "../src/db-work";
 import { handleView } from "../src/view";
+import { EDGES, MISSING } from "../src/graph";
 import { CONTRACT_VERSION } from "../src/tool-kit";
 import type { Env } from "../src/env";
 
@@ -1030,5 +1031,124 @@ describe("เมืองสามมิติ", () => {
     const { res, html } = await city();
     expect(res.status).toBe(200);
     expect(html).toContain("ยังไม่มีกระทู้");
+  });
+});
+
+/**
+ * หน้ากราฟความรู้
+ *
+ * ข้อที่ต้องล็อกมากที่สุดไม่ใช่ความสวย — เป็นข้อที่ **เส้นที่ยังไม่มีต้องถูกวาดให้เห็น**
+ * กราฟที่วาดแต่เส้นที่มีจะอ่านเหมือนว่าความสัมพันธ์ครบแล้ว ซึ่งไม่จริง และเป็นรูปเดียวกับ
+ * `absent ≠ empty` ที่ใช้กับผลของ tool ทุกตัว
+ */
+describe("กราฟความรู้", () => {
+  const GRAPH = "/view/graph";
+
+  async function graph() {
+    const res = await handleView(
+      get(GRAPH, { authorization: `Bearer ${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    return { res: res!, html: await res!.text() };
+  }
+
+  it("ไม่มีรหัสได้ 401", async () => {
+    expect((await handleView(get(GRAPH), withToken(TOKEN)))!.status).toBe(401);
+  });
+
+  it("ไม่มี JavaScript และไม่ดึง asset จากที่อื่น", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await graph();
+
+    expect(html).not.toMatch(/<script/i);
+    expect(html).not.toMatch(/\son[a-z]+\s*=/i);
+    expect(html).not.toMatch(/https?:\/\//i);
+  });
+
+  /** ทุกเส้นใน EDGES ต้องโผล่ในหน้า — เส้นที่หายไปคือเส้นที่ไม่มีใครรู้ว่ามี */
+  it("วาดทุกเส้นที่ EDGES ประกาศ", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await graph();
+
+    for (const e of EDGES) {
+      expect(html).toContain(`${e.from}.${e.field} → ${e.to}`);
+    }
+    expect(html).toContain(`เส้นที่เดินได้ <b>${EDGES.filter((e) => e.kind === "field").length}</b>`);
+  });
+
+  /**
+   * **ด่านที่สำคัญที่สุดของหน้านี้** — เส้นที่ยังไม่มีต้องอยู่ในหน้า ทั้งในภาพและในคำอธิบาย
+   * มิวแทนต์ที่วาดแต่เส้นที่มีต้องแดงที่ข้อนี้
+   */
+  it("วาดเส้นที่ยังไม่มีให้เห็นด้วย ไม่ใช่ละไว้", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await graph();
+
+    for (const [rel, why] of MISSING) {
+      expect(html).toContain(rel);
+      expect(html).toContain(why);
+    }
+    expect(html).toContain(`เส้นที่ยังไม่มี <b>${MISSING.length}</b>`);
+    // เส้นประจางในภาพ ไม่ใช่มีแต่ในรายการข้างล่าง
+    expect(html).toMatch(/class="ms"/);
+    expect(html).toContain("ไม่มีฟิลด์");
+  });
+
+  it("มีโหนดครบห้าชนิดพร้อมจำนวนจริง", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const t = await createTask(env.DB, WS, "งานหนึ่ง", "", chatgpt, d.id);
+    await createHandoff(env.DB, t.id, "Claude", "ฝากด้วย", chatgpt);
+    await recordDecision(env.DB, WS, "ใบหนึ่ง", "เหตุผล", chatgpt, d.id);
+
+    const { html } = await graph();
+    for (const kind of ["discussion", "task", "handoff", "decision", "plan"]) {
+      expect(html).toMatch(new RegExp(`${kind} · \\d+`));
+    }
+    expect(html).toContain("discussion · 1");
+    expect(html).toContain("task · 1");
+    expect(html).toContain("handoff · 1");
+    expect(html).toContain("decision · 1");
+  });
+
+  /**
+   * ตัวเลขบนเส้นคือ "ใช้ไปกี่แถวจากทั้งหมด" ไม่ใช่จำนวนแถวทั้งหมด
+   *
+   * ข้อนี้คือของที่กราฟนี้บอกแล้วที่อื่นไม่บอก — `task.result_ref` มีค่าน้อยกว่าจำนวนใบงาน
+   * มาก ซึ่งเป็นเรื่องเดียวกับ `health.done_without_result` แต่เห็นเป็นเส้นบาง ๆ แทนตัวเลขลอย
+   */
+  it("ตัวเลขบนเส้นบอกว่าฟิลด์นั้นมีค่ากี่แถวจากทั้งหมด", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    // ใบงานสองใบ ใบเดียวผูกกระทู้ และไม่มีใบไหนมี result_ref
+    await createTask(env.DB, WS, "ผูกกระทู้", "", chatgpt, d.id);
+    await createTask(env.DB, WS, "ไม่ผูกกระทู้", "", chatgpt);
+
+    const { html } = await graph();
+    expect(html).toContain("task.discussion_id → discussion</b> · 1/2");
+    expect(html).toContain("task.result_ref → *</b> · 0/2");
+  });
+
+  /** `result_ref` เป็นข้อความอิสระ ต้องบอกว่าพิสูจน์ไม่ได้ว่าถูก ไม่ใช่วาดเหมือนเส้นอื่น */
+  it("แยกเส้นที่เป็นข้อความอิสระออกจากเส้นที่มีฟิลด์รองรับ", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await graph();
+
+    expect(html).toContain("ข้อความอิสระ พิสูจน์ไม่ได้ว่าถูก");
+    expect(html).toMatch(/class="tx"/);
+  });
+
+  it("หน้ารายการมีทางเข้ากราฟ", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const res = await handleView(
+      get("/view", { authorization: `Bearer ${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    expect(await res!.text()).toContain("/view/graph?ws=ws-001");
+  });
+
+  it("โต๊ะที่ว่างเปล่ายังวาดกราฟได้ ตัวเลขเป็นศูนย์", async () => {
+    const { res, html } = await graph();
+    expect(res.status).toBe(200);
+    expect(html).toContain("discussion · 0");
+    for (const [rel] of MISSING) expect(html).toContain(rel);
   });
 });

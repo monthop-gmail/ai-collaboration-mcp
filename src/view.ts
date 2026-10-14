@@ -14,8 +14,10 @@
  */
 
 import { readMessages, readWorkspaceContext, getDiscussion } from "./db";
+import { EDGES, MISSING } from "./graph";
 import {
   readDecisions,
+  readGraphStats,
   readHandoffStateCounts,
   readItemTotals,
   readHandoffs,
@@ -50,6 +52,9 @@ const ITEMS_PATH = "items";
  * อยู่ใต้ `/view/` แล้วได้ `VIEW_TOKEN` กับ cookie มาทั้งชุดโดยไม่เขียน auth เพิ่มเลย
  */
 const CITY_PATH = "3d";
+
+/** กราฟความรู้ — เส้นทางย่อยของ `/view` ด้วยเหตุผลเดียวกับ `CITY_PATH` */
+const GRAPH_PATH = "graph";
 
 const COOKIE = "collab_view";
 
@@ -267,6 +272,8 @@ function renderList(
       `<span><a href="#rules"><b>${rules.length}</b> กติกาของโต๊ะ</a></span>` +
       `<span><a href="${VIEW_ROUTE}/${CITY_PATH}?ws=${encodeURIComponent(workspace)}">` +
       `เมืองสามมิติ →</a></span>` +
+      `<span><a href="${VIEW_ROUTE}/${GRAPH_PATH}?ws=${encodeURIComponent(workspace)}">` +
+      `กราฟความรู้ →</a></span>` +
       `<span title="${esc(CONTRACT_TITLE)}">contract ${CONTRACT_VERSION}</span>` +
       deployedFrom(commitSha) +
       `</div>` +
@@ -743,6 +750,258 @@ async function renderCity(env: Env, workspace: string): Promise<Response> {
   return page(`เมืองของโต๊ะ ${workspace}`, body, CITY_STYLE, "city");
 }
 
+/* ── กราฟความรู้ของโต๊ะ ─────────────────────────────────────────────────────
+ *
+ * **ไม่ใช่กราฟของระเบียนทุกใบ เป็นกราฟของชนิดข้อมูล** และนั่นเป็นการตัดสินใจ
+ *
+ * ของจริงมีกระทู้ 106 งาน 500 กว่า ใบฝาก 460 กว่า · วาดทุกโหนดได้ภาพที่สวยและ
+ * อ่านไม่ออก แล้วไม่มีใครตอบคำถามอะไรได้จากมัน · กราฟระดับชนิดมีห้าโหนดและตอบ
+ * คำถามที่ตอบไม่ได้จากที่อื่นเลย — **เส้นไหนเดินได้ เส้นไหนมีแต่ในคำพูด**
+ *
+ * เส้นทึบมาจาก `EDGES` ใน `src/graph.ts` · เส้นประมาจาก `MISSING` ซึ่งเป็น
+ * ความสัมพันธ์ที่ทีมพูดถึงกันแต่ไม่มีฟิลด์รองรับ · **วาดของที่ไม่มีให้เห็นด้วย**
+ * เพราะกราฟที่วาดแต่เส้นที่มีจะอ่านเหมือนว่าความสัมพันธ์ครบแล้ว ซึ่งไม่จริง
+ *
+ * ไม่มี JavaScript · เป็น SVG ที่ server คำนวณพิกัดเสร็จแล้วส่งไปก้อนเดียว
+ * เรขาคณิตอยู่ใน TypeScript จึงเทสต์ได้ ไม่ใช่ของที่ต้องเปิดดูจึงรู้ว่าถูก
+ */
+
+/** ชนิดข้อมูลที่ `EDGES` พูดถึง — ห้าชนิด ไม่รวม message กับ participant ที่ไม่มีเส้นในตารางนั้น */
+const GRAPH_NODES = ["discussion", "task", "handoff", "plan", "decision"] as const;
+type GraphNode = (typeof GRAPH_NODES)[number];
+
+/** มุมของแต่ละโหนดบนวงกลม เลือกให้เส้นที่ใช้บ่อยเป็นเส้นสั้นระหว่างโหนดข้างกัน */
+const NODE_ANGLE: Record<GraphNode, number> = {
+  discussion: -90,
+  task: -18,
+  handoff: 54,
+  plan: 126,
+  decision: 198,
+};
+
+const LABEL_TH: Record<string, string> = {
+  discussion: "กระทู้",
+  task: "ใบงาน",
+  handoff: "ใบฝากงาน",
+  plan: "แผน",
+  decision: "ใบตัดสิน",
+};
+
+const SVG_W = 920;
+const SVG_H = 560;
+const CX = SVG_W / 2;
+const CY = 268;
+const RADIUS = 186;
+const BOX_W = 148;
+const BOX_H = 50;
+/** ระยะที่หดปลายเส้นเข้ามา เพื่อให้หัวลูกศรไม่ไปจมอยู่ใต้กล่อง */
+const TRIM = 40;
+
+const GRAPH_STYLE = `
+body.graph { max-width: 1000px; }
+.gwrap { overflow-x: auto; margin: 14px 0 6px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--card); }
+.gsvg { display: block; margin: 0 auto; }
+.gsvg text { font: 12px ui-sans-serif, "Noto Sans Thai", sans-serif; fill: var(--fg); }
+.gsvg .nb { fill: var(--bg); stroke: var(--fg); stroke-width: 1.4; }
+.gsvg .nt { font-weight: 600; font-size: 13px; }
+.gsvg .nc { fill: var(--muted); font-size: 11px; }
+.gsvg .ed { stroke: var(--fg); stroke-width: 1.6; fill: none; }
+.gsvg .tx { stroke: var(--fg); stroke-width: 1.6; fill: none; stroke-dasharray: 2 3; }
+.gsvg .ms { stroke: var(--muted); stroke-width: 1.3; fill: none; stroke-dasharray: 7 6; opacity: .75; }
+.gsvg .el { font-size: 11px; paint-order: stroke; stroke: var(--bg); stroke-width: 3.5;
+  stroke-linejoin: round; text-anchor: middle; }
+.gsvg .ml { font-size: 11px; fill: var(--muted); paint-order: stroke; stroke: var(--bg);
+  stroke-width: 3.5; stroke-linejoin: round; text-anchor: middle; }
+.gkey { display: grid; gap: 4px 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+.gkey b { color: var(--fg); font-weight: 600; }
+`;
+
+function polar(deg: number, r = RADIUS): { x: number; y: number } {
+  const rad = (deg * Math.PI) / 180;
+  return { x: CX + r * Math.cos(rad), y: CY + r * Math.sin(rad) };
+}
+
+/** หดปลายเส้นทั้งสองข้างเท่า ๆ กัน — เส้นที่สั้นกว่าสองเท่าของระยะหดจะไม่ถูกหด */
+function trim(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): { x1: number; y1: number; x2: number; y2: number } {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const t = len > TRIM * 2.2 ? TRIM / len : 0;
+  return {
+    x1: a.x + dx * t,
+    y1: a.y + dy * t,
+    x2: b.x - dx * t,
+    y2: b.y - dy * t,
+  };
+}
+
+function edgeLine(from: GraphNode, to: GraphNode, cls: string, label: string, marker: string) {
+  const { x1, y1, x2, y2 } = trim(polar(NODE_ANGLE[from]), polar(NODE_ANGLE[to]));
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  // เลื่อนป้ายออกตั้งฉากกับเส้น ไม่ให้ทับตัวเส้นเอง
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ox = (-dy / len) * 11;
+  const oy = (dx / len) * 11;
+  const lcls = cls === "ms" ? "ml" : "el";
+  return (
+    `<line class="${cls}" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" ` +
+    `x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" marker-end="url(#${marker})"/>` +
+    `<text class="${lcls}" x="${(mx + ox).toFixed(1)}" y="${(my + oy).toFixed(1)}">${esc(label)}</text>`
+  );
+}
+
+/** เส้นที่ชี้กลับมาที่ชนิดเดิม — วาดเป็นวงเล็กข้างโหนด ไม่ใช่เส้นตรงที่มองไม่เห็น */
+function selfLoop(node: GraphNode, cls: string, label: string, marker: string) {
+  const p = polar(NODE_ANGLE[node]);
+  const out = polar(NODE_ANGLE[node], RADIUS + 86);
+  const r = 26;
+  const cx = (p.x + out.x) / 2 + (out.x - p.x) * 0.1;
+  const cy = (p.y + out.y) / 2 + (out.y - p.y) * 0.1;
+  const lcls = cls === "ms" ? "ml" : "el";
+  return (
+    `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}" ` +
+    `marker-end="url(#${marker})"/>` +
+    `<text class="${lcls}" x="${cx.toFixed(1)}" y="${(cy - r - 7).toFixed(1)}">${esc(label)}</text>`
+  );
+}
+
+async function renderGraph(env: Env, workspace: string): Promise<Response> {
+  const [stats, decisions] = await Promise.all([
+    readGraphStats(env.DB, workspace),
+    readDecisions(env.DB, workspace, 200, undefined, undefined, true),
+  ]);
+
+  const used = (field: string) => stats.edges[field] ?? { used: 0, rows: 0 };
+  const ratio = (field: string) => {
+    const e = used(field);
+    return `${e.used}/${e.rows}`;
+  };
+
+  const markers =
+    `<defs>` +
+    `<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" ` +
+    `orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>` +
+    `<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" ` +
+    `orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor" opacity=".7"/></marker>` +
+    `</defs>`;
+
+  // เส้นทึบ = เดินได้ · มาจาก EDGES ทั้งหมด ไม่ได้เขียนรายการใหม่ที่นี่
+  const solid = EDGES.filter((e) => e.to !== "*")
+    .map((e) => {
+      const from = e.from as GraphNode;
+      const to = e.to as GraphNode;
+      const label = `${e.field} · ${ratio(`${e.from}.${e.field}`)}`;
+      if (from === to) return selfLoop(from, "ed", label, "ah");
+      return edgeLine(from, to, "ed", label, "ah");
+    })
+    .join("");
+
+  // `result_ref` ชี้ไปที่ "อะไรก็ได้" เพราะเป็นข้อความอิสระ — ปลายทางจึงไม่ใช่โหนด
+  const textEdge = EDGES.filter((e) => e.to === "*")
+    .map((e) => {
+      const p = polar(NODE_ANGLE[e.from as GraphNode]);
+      const q = polar(NODE_ANGLE[e.from as GraphNode], RADIUS + 104);
+      const t = trim(p, q);
+      return (
+        `<line class="tx" x1="${t.x1.toFixed(1)}" y1="${t.y1.toFixed(1)}" ` +
+        `x2="${t.x2.toFixed(1)}" y2="${t.y2.toFixed(1)}" marker-end="url(#am)"/>` +
+        `<text class="ml" x="${q.x.toFixed(1)}" y="${(q.y + 16).toFixed(1)}">` +
+        `${esc(e.field)} · ${esc(ratio(`${e.from}.${e.field}`))} · ข้อความอิสระ</text>`
+      );
+    })
+    .join("");
+
+  // เส้นประจาง = ไม่มีฟิลด์รองรับ · ข้อที่ปลายทางไม่ใช่โหนด (evidence) อยู่ในคำอธิบายล่าง
+  const missingPairs = MISSING.map(([rel]) => rel)
+    .map((rel) => rel.split(" → "))
+    .filter(
+      (parts): parts is [GraphNode, GraphNode] =>
+        parts.length === 2 &&
+        (GRAPH_NODES as readonly string[]).includes(parts[0]!) &&
+        (GRAPH_NODES as readonly string[]).includes(parts[1]!),
+    );
+  const dashed = missingPairs
+    .map(([a, b]) =>
+      a === b ? selfLoop(a, "ms", "ไม่มีฟิลด์", "am") : edgeLine(a, b, "ms", "ไม่มีฟิลด์", "am"),
+    )
+    .join("");
+
+  const boxes = GRAPH_NODES.map((n) => {
+    const p = polar(NODE_ANGLE[n]);
+    const x = p.x - BOX_W / 2;
+    const y = p.y - BOX_H / 2;
+    return (
+      `<g><rect class="nb" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${BOX_W}" ` +
+      `height="${BOX_H}" rx="9"/>` +
+      `<text class="nt" x="${p.x.toFixed(1)}" y="${(p.y - 3).toFixed(1)}" text-anchor="middle">` +
+      `${esc(LABEL_TH[n] ?? n)}</text>` +
+      `<text class="nc" x="${p.x.toFixed(1)}" y="${(p.y + 15).toFixed(1)}" text-anchor="middle">` +
+      `${esc(n)} · ${stats.nodes[n] ?? 0}</text></g>`
+    );
+  }).join("");
+
+  const svg =
+    `<svg class="gsvg" width="${SVG_W}" height="${SVG_H}" viewBox="0 0 ${SVG_W} ${SVG_H}" ` +
+    `role="img" aria-label="กราฟความสัมพันธ์ของชนิดข้อมูลในโต๊ะ">` +
+    `${markers}${dashed}${solid}${textEdge}${boxes}</svg>`;
+
+  // โซ่ของใบที่ถูกแทน — เส้น decision → decision ที่มีของจริงให้ชี้
+  const chain = decisions.rows
+    .filter((d) => d.superseded_by)
+    .slice(0, 6)
+    .map(
+      (d) =>
+        `<div class="item"><div class="muted"><code>${esc(d.id.slice(0, 14))}</code> ` +
+        `(${esc(d.status)}) → <code>${esc((d.superseded_by ?? "").slice(0, 14))}</code></div>` +
+        `<div>${esc(d.title)}</div></div>`,
+    )
+    .join("");
+
+  const body =
+    `<div class="top"><h1>กราฟความรู้ของโต๊ะ ${esc(workspace)}</h1>` +
+    `<span class="muted">contract <b title="${esc(CONTRACT_TITLE)}">${CONTRACT_VERSION}</b></span></div>` +
+    `<div class="muted">โหนดคือ<b>ชนิด</b>ของข้อมูล ไม่ใช่ระเบียนรายใบ · ` +
+    `เส้นทึบคือความสัมพันธ์ที่มีฟิลด์รองรับและเดินได้ · ` +
+    `<b>เส้นประจางคือความสัมพันธ์ที่ทีมพูดถึงกันแต่ไม่มีฟิลด์รองรับ</b> · ` +
+    `ตัวเลขบนเส้นคือจำนวนแถวที่ฟิลด์นั้นมีค่า เทียบกับแถวทั้งหมดของชนิดนั้น</div>` +
+    `<div class="bar"><span>ข้อความ <b>${stats.nodes.message ?? 0}</b></span>` +
+    `<span>ชื่อที่โพสต์จริง <b>${stats.nodes.participant ?? 0}</b></span>` +
+    `<span>เส้นที่เดินได้ <b>${EDGES.filter((e) => e.kind === "field").length}</b></span>` +
+    `<span>เส้นที่ยังไม่มี <b>${MISSING.length}</b></span>` +
+    `<span><a href="${VIEW_ROUTE}">← หน้ารายการ</a></span>` +
+    `<span><a href="${VIEW_ROUTE}/${CITY_PATH}?ws=${encodeURIComponent(workspace)}">เมืองสามมิติ →</a></span>` +
+    `</div>` +
+    `<div class="gwrap">${svg}</div>` +
+    `<div class="gkey">` +
+    EDGES.map(
+      (e) =>
+        `<span><b>${esc(e.from)}.${esc(e.field)} → ${esc(e.to)}</b> · ` +
+        `${esc(ratio(`${e.from}.${e.field}`))} · ${esc(e.tool)}` +
+        `${e.kind === "text" ? " · ข้อความอิสระ พิสูจน์ไม่ได้ว่าถูก" : ""}</span>`,
+    ).join("") +
+    `</div>` +
+    `<h2 class="section">เส้นที่ยังไม่มี</h2>` +
+    `<div class="gkey">` +
+    MISSING.map(([rel, why]) => `<span><b>${esc(rel)}</b> · ${esc(why)}</span>`).join("") +
+    `</div>` +
+    (chain
+      ? `<h2 class="section">ใบตัดสินที่ถูกแทน — ของจริงบนเส้น decision → decision</h2>${chain}`
+      : "") +
+    `<div class="note">${TZ_NOTE} · หน้านี้อ่านอย่างเดียวและไม่มี JavaScript — ` +
+    `SVG คำนวณพิกัดที่ server · รายการเส้นมาจาก <code>src/graph.ts</code> ซึ่งเป็นนิยามเดียว ` +
+    `ที่ <code>scripts/context-graph.mjs</code> ใช้ร่วมกัน และมีเทสต์เทียบไว้ว่าไม่เพี้ยนจากกัน</div>`;
+
+  return page(`กราฟความรู้ของโต๊ะ ${workspace}`, body, GRAPH_STYLE, "graph");
+}
+
 /**
  * รหัสผ่านของหน้านี้แยกจาก `MCP_AUTH_TOKEN` โดยตั้งใจ
  *
@@ -838,6 +1097,7 @@ export async function handleView(request: Request, env: Env): Promise<Response |
       return await renderItems(env, workspace, url.searchParams.get("all") === "1");
     }
     if (id === CITY_PATH) return await renderCity(env, workspace);
+    if (id === GRAPH_PATH) return await renderGraph(env, workspace);
     if (id) return await renderDiscussion(env, id, workspace);
 
     const [context, open, rules] = await Promise.all([
