@@ -650,6 +650,88 @@ export async function readItemTotals(
 }
 
 /**
+ * แผนที่การส่งงาน — ใครส่งให้ใคร นับครบทุกใบ
+ *
+ * **รวมยอดใน SQL ไม่ใช่ไล่ page แล้วรวมใน TS** · ใบฝากงานมี 460 กว่าใบ และเพดานของ
+ * `get_handoffs` คือ 200 แถวต่อหน้า · การรวมฝั่งผู้เรียกจะได้แผนที่ที่ขาดไปครึ่งโดย
+ * **หน้าตายังเหมือนแผนที่** ซึ่งเป็นความผิดพลาดที่มองด้วยตาไม่เห็น
+ *
+ * จับคู่ชื่อแบบ **ไม่สนตัวพิมพ์** เพราะ `dec-bcb9854f` กำหนดว่า `team_id` เป็นตัวพิมพ์เล็ก
+ * แต่ผู้ส่งพิมพ์ชื่อเองได้ · ถ้าเทียบตรงตัว ทีมเดียวกันที่สะกดคนละแบบจะกลายเป็นสองโหนด
+ * ซึ่งเป็นแผลที่ `9b498ff` แก้ไปแล้วที่อื่น
+ *
+ * **ชื่อที่เอาไปแสดงใช้ `MIN()` ไม่ใช่คอลัมน์เปล่า** — SQLite รับประกันคอลัมน์เปล่า
+ * ก็ต่อเมื่อทั้งคิวรีมี `min`/`max` ตัวเดียว · ที่นี่มีหลายตัวรวม (`COUNT` และ `SUM`)
+ * การรับประกันจึงเป็นโมฆะ และชื่อที่ได้จะมาจากแถวไหนก็ได้โดยไม่มีอะไรฟ้อง
+ */
+export interface HandoffEdge {
+  from: string;
+  to: string;
+  n: number;
+  pending: number;
+  /** ใบที่ผู้กดรับไม่ใช่ชื่อที่จ่าหน้าถึง — ของจริงที่ `health.delegated` รายงานเป็นยอด */
+  forked: number;
+}
+
+export interface HandoffFork {
+  named: string;
+  actual: string;
+  n: number;
+}
+
+export interface HandoffMap {
+  edges: HandoffEdge[];
+  forks: HandoffFork[];
+  total: number;
+}
+
+export async function readHandoffMap(db: D1Database, workspaceId: string): Promise<HandoffMap> {
+  await requireWorkspace(db, workspaceId);
+
+  const from = " FROM handoffs h JOIN tasks t ON t.id = h.task_id WHERE t.workspace_id = ?1";
+  const mismatch = "h.accepted_by IS NOT NULL AND lower(h.accepted_by) != lower(h.to_whom)";
+
+  const [pairs, forks, total] = await db.batch([
+    db
+      .prepare(
+        `SELECT MIN(h.from_name) AS a, MIN(h.to_whom) AS b, COUNT(*) AS n,
+                SUM(CASE WHEN h.status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN ${mismatch} THEN 1 ELSE 0 END) AS forked
+           ${from}
+          GROUP BY lower(h.from_name), lower(h.to_whom)
+          ORDER BY n DESC`,
+      )
+      .bind(workspaceId),
+    db
+      .prepare(
+        `SELECT MIN(h.to_whom) AS named, MIN(h.accepted_by) AS actual, COUNT(*) AS n
+           ${from} AND ${mismatch}
+          GROUP BY lower(h.to_whom), lower(h.accepted_by)
+          ORDER BY n DESC`,
+      )
+      .bind(workspaceId),
+    db.prepare(`SELECT COUNT(*) AS n${from}`).bind(workspaceId),
+  ]);
+
+  // ชื่อคอลัมน์ของ SQL เป็น `a`/`b` ไม่ใช่ `from`/`to` — `from` เป็นคำสงวนของ SQL
+  // และการ cast ผลลัพธ์เป็น interface ปลายทางตรง ๆ จะผ่าน typecheck แล้วได้ `undefined`
+  // ทุกแถวบนของจริง · แปลงชื่อที่นี่ให้เห็นชัดว่าแปลง
+  type PairRow = { a: string | null; b: string | null; n: number; pending: number; forked: number };
+
+  return {
+    edges: (pairs.results as PairRow[]).map((r) => ({
+      from: r.a ?? "",
+      to: r.b ?? "",
+      n: r.n,
+      pending: r.pending,
+      forked: r.forked,
+    })),
+    forks: forks.results as HandoffFork[],
+    total: (total.results as Array<{ n: number }>)[0]?.n ?? 0,
+  };
+}
+
+/**
  * ยอดของกราฟความรู้ — จำนวนระเบียนต่อชนิด และจำนวนครั้งที่แต่ละเส้นถูกใช้จริง
  *
  * **แยกเป็นสี่คิวรีเพราะ D1 จำกัดจำนวนท่อนใน compound SELECT ไว้ต่ำ** — รวม `UNION`
