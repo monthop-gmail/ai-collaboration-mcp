@@ -864,3 +864,171 @@ describe("แยกเหตุที่ไม่ต้องรับแล้�
     expect(badge("waiting")).toBe(1);
   });
 });
+
+/**
+ * หน้าเมืองสามมิติ
+ *
+ * ด่านที่สำคัญที่สุดในชุดนี้ไม่ใช่ความสวย — เป็นข้อที่หัวไฟล์ `src/view.ts` ประกาศไว้ว่า
+ * **ไม่มี JavaScript และไม่มี asset ภายนอก** · ข้อนั้นเป็นเหตุผลด้านความปลอดภัย
+ * ไม่ใช่รสนิยม และหน้าที่เพิ่มทีหลังคือหน้าที่จะทำให้ข้อนั้นพังเงียบ ๆ ที่สุด
+ */
+describe("เมืองสามมิติ", () => {
+  const CITY = "/view/3d";
+
+  async function city(headers: Record<string, string> = { authorization: `Bearer ${TOKEN}` }) {
+    const res = await handleView(get(CITY, headers), withToken(TOKEN));
+    return { res: res!, html: await res!.text() };
+  }
+
+  /**
+   * เหตุที่หน้านี้ต้องเป็น `/view/3d` ไม่ใช่ `/view3D`
+   *
+   * cookie ของหน้านี้ตั้ง `Path=/view` · กติกา path-match ของ cookie บังคับว่าตัวอักษร
+   * ถัดจาก cookie-path ต้องเป็น `/` · `/view3D` จึงไม่ได้ cookie ติดไปด้วย และคนเปิด
+   * จะถูกถามรหัสใหม่ทุกครั้งโดยไม่มีอะไรบอกว่าทำไม
+   *
+   * เทสต์นี้ล็อกไว้สองทาง — ชื่อที่ใช้ต้องอยู่ใต้ `/view/` และชื่อที่ไม่ได้อยู่ใต้มัน
+   * ต้องไม่ถูกดักเข้าหน้านี้เลย
+   */
+  it("อยู่ใต้ /view/ เพื่อให้ได้ด่านเดียวกับหน้าหลัก", async () => {
+    const cookiePath = (
+      await handleView(get(`/view?key=${TOKEN}`), withToken(TOKEN))
+    )!.headers.get("set-cookie");
+    expect(cookiePath).toContain("Path=/view");
+    // ถ้าวันหนึ่งมีคนย้ายหน้านี้ไป /view3D เทสต์นี้จะยังเขียว แต่บรรทัดถัดไปจะแดง
+    expect(CITY.startsWith("/view/")).toBe(true);
+    expect(await handleView(get("/view3D"), withToken(TOKEN))).toBeNull();
+  });
+
+  it("ไม่มีรหัสได้ 401 เหมือนหน้าอื่น", async () => {
+    const res = await handleView(get(CITY), withToken(TOKEN));
+    expect(res!.status).toBe(401);
+  });
+
+  /**
+   * มิวแทนต์ที่ใส่ `<script>` หรือดึง three.js จาก CDN ต้องแดงที่ข้อนี้
+   *
+   * เขียนเป็นสองด่านแยกกันโดยตั้งใจ — ด่านแรกจับ JavaScript ด่านที่สองจับการเรียก
+   * ของจากที่อื่น · ของที่ดึงจาก CDN ไม่มี `<script` ก็มีได้ (เช่น `<link>` หรือ
+   * `background:url(...)`) และ JavaScript ที่ฝังในหน้าก็ไม่ต้องมี URL ภายนอก
+   */
+  it("ไม่มี JavaScript เลยสักบรรทัด", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await city();
+
+    expect(html).not.toMatch(/<script/i);
+    expect(html).not.toMatch(/\son[a-z]+\s*=/i);
+    expect(html).not.toMatch(/javascript:/i);
+  });
+
+  it("ไม่ดึง asset จากที่อื่นเลย — รวมถึง three.js จาก CDN", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await city();
+
+    // ลิงก์ไปหน้าอื่นของตัวเองได้ แต่ห้ามมี origin ภายนอกอยู่ในหน้าเลย
+    expect(html).not.toMatch(/https?:\/\//i);
+    expect(html).not.toMatch(/<link\b/i);
+    expect(html).not.toMatch(/url\(/i);
+  });
+
+  /**
+   * ตึกต้องมีเท่าจำนวนกระทู้ ไม่ใช่ "มีตึกบ้าง" — เมืองที่ขาดตึกไปครึ่งอ่านผิดทั้งเมือง
+   * และเป็นความผิดพลาดที่มองด้วยตาไม่เห็น เพราะเมืองยังดูเหมือนเมือง
+   */
+  it("ตึกหนึ่งใบต่อหนึ่งกระทู้ ครบทุกใบ", async () => {
+    for (let i = 0; i < 7; i++) {
+      const d = await createDiscussion(env.DB, WS, `กระทู้ ${i}`, chatgpt);
+      for (let m = 0; m <= i; m++) await postMessage(env.DB, d.id, "note", `ข้อความ ${m}`, claude);
+    }
+    const { html } = await city();
+
+    expect((html.match(/class="bx bld"/g) ?? []).length).toBe(7);
+    expect(html).toContain("กระทู้ <b>7</b>");
+  });
+
+  /** ทุกตึกต้องมีห้าหน้า เพราะฉากหมุนได้ ตึกที่ขาดหน้าจะกลายเป็นกระดาษตอนหมุนไปอีกด้าน */
+  it("กล่องทุกใบมีห้าหน้า", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await city();
+
+    const boxes = (html.match(/class="bx[^"]*"/g) ?? []).length;
+    for (const face of ["n", "s", "wl", "el", "r"]) {
+      expect((html.match(new RegExp(`<i class="${face}">`, "g")) ?? []).length).toBe(boxes);
+    }
+  });
+
+  /**
+   * ตัวละครคือทีมที่ **โพสต์จริง** ไม่ใช่ทีมที่ถูกเอ่ยถึงหรือถูกส่งงานไป
+   *
+   * เกณฑ์เดียวกับที่ `get_participants` ใช้ และเป็นข้อที่โต๊ะนี้ยืนมาตลอดว่าชื่อที่คนอื่น
+   * พิมพ์ถึงไม่ใช่หลักฐานว่ามีตัวตน · ถ้าเอาชื่อจาก `assigned_to` หรือ `to_whom` มาเดิน
+   * เมืองจะมีคนเดินที่ไม่เคยมาโต๊ะนี้เลย
+   */
+  it("ปล่อยเดินเฉพาะทีมที่โพสต์จริง", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    await postMessage(env.DB, d.id, "note", "ว่าไง", claude);
+    // ชื่อที่ถูกส่งงานไปแต่ไม่เคยโพสต์ ต้องไม่โผล่เป็นตัวละคร
+    const t = await createTask(env.DB, WS, "งาน", "", chatgpt, undefined, "ไม่เคยมา");
+    await createHandoff(env.DB, t.id, "ไม่เคยมา", "ฝากด้วย", chatgpt);
+
+    const { html } = await city();
+    expect(html).toContain("Claude");
+    // ChatGPT เปิดกระทู้แต่ไม่ได้โพสต์ — ไม่ใช่ participant ตามนิยามที่โต๊ะใช้อยู่
+    // (`get_participants` นับเฉพาะชื่อที่โพสต์จริง) หน้านี้จึงต้องไม่ปล่อยเขาเดิน
+    expect(html).not.toMatch(/title="ChatGPT ·/);
+    expect(html).not.toContain("ไม่เคยมา");
+  });
+
+  /** ตัวละครต้องเดินอยู่ในเมือง — เมืองแคบไม่ได้แปลว่าเดินถอยหลังออกนอกฉาก */
+  it("ระยะเดินอยู่ในเมืองเสมอ แม้เมืองจะแคบ", async () => {
+    const d = await createDiscussion(env.DB, WS, "กระทู้เดียว", chatgpt);
+    await postMessage(env.DB, d.id, "note", "หนึ่ง", claude);
+
+    const { html } = await city();
+    const town = Number(/--town-w:(\d+)px/.exec(html)![1]);
+    const walks = [...html.matchAll(/--x0:(\d+)px;--x1:(\d+)px/g)];
+    expect(walks.length).toBeGreaterThan(0);
+    for (const [, a, b] of walks) {
+      expect(Number(b)).toBeGreaterThan(Number(a));
+      expect(Number(b)).toBeLessThanOrEqual(town);
+    }
+  });
+
+  /** หน้านี้ไม่ใช่ที่อ่านเนื้อกระทู้ — ชื่อเรื่องกับตัวเลขพอ ไม่เอาเนื้อข้อความลงมา */
+  it("ไม่มีเนื้อข้อความอยู่ในหน้า", async () => {
+    const d = await createDiscussion(env.DB, WS, "หัวเรื่องที่แสดงได้", chatgpt);
+    await postMessage(env.DB, d.id, "note", "เนื้อความที่ต้องไม่โผล่ในหน้าเมือง", claude);
+
+    const { html } = await city();
+    expect(html).toContain("หัวเรื่องที่แสดงได้");
+    expect(html).not.toContain("เนื้อความที่ต้องไม่โผล่");
+  });
+
+  /**
+   * มุมกล้องเป็นลิงก์ `:target` ไม่ใช่ปุ่ม เพราะปุ่มต้องมี JavaScript
+   * และ `prefers-reduced-motion` ต้องหยุดภาพให้คนที่ตั้งค่าไว้
+   */
+  it("มีมุมกล้องให้เลือกและเคารพ prefers-reduced-motion", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const { html } = await city();
+
+    for (const id of ["iso", "front", "top"]) expect(html).toContain(`id="${id}"`);
+    expect(html).toContain("prefers-reduced-motion");
+    expect(html).toContain("animation-play-state: paused");
+  });
+
+  it("หน้ารายการมีทางเข้าเมือง", async () => {
+    await createDiscussion(env.DB, WS, "กระทู้หนึ่ง", chatgpt);
+    const res = await handleView(
+      get("/view", { authorization: `Bearer ${TOKEN}` }),
+      withToken(TOKEN),
+    );
+    expect(await res!.text()).toContain("/view/3d?ws=ws-001");
+  });
+
+  it("โต๊ะที่ไม่มีกระทู้ไม่พัง", async () => {
+    const { res, html } = await city();
+    expect(res.status).toBe(200);
+    expect(html).toContain("ยังไม่มีกระทู้");
+  });
+});
