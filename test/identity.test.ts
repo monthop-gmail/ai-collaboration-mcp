@@ -168,47 +168,31 @@ describe("props ที่รูปแบบไม่ตรง", () => {
 });
 
 /**
- * ตาราง alias เปลี่ยนแค่ป้ายชื่อ ไม่แตะตัวตนจริง และต้องทนกับค่าที่ตั้งผิดรูปแบบ
- * เพราะมันมาจาก config ที่คนพิมพ์เอง ไม่ใช่จากโปรแกรม
+ * ชื่อถูกบันทึกตรงตามที่ค่ายประกาศมาตอน DCR ไม่มีชั้นแปลงชื่อคั่นอยู่
+ *
+ * เคยมีตาราง alias (`CLIENT_NAME_ALIASES="Google=Gemini"`) ทำหน้าที่นี้ ถอดออกแล้ว
+ * 16 ต.ค. 2026 · เทสต์ชุดนี้เป็น **กรณีบวก** ที่ตรึงพฤติกรรมใหม่ไว้ ไม่ใช่การลบ
+ * ความคุ้มครองทิ้ง — ถ้ามีใครใส่ชั้นแปลงชื่อกลับมา มันจะไม่ผ่านเงียบ ๆ
  */
-describe("แก้ชื่อที่แสดงผ่าน CLIENT_NAME_ALIASES", () => {
-  it("เปลี่ยนชื่อที่ตรงกับตาราง", () => {
+describe("ชื่อจาก OAuth ถูกบันทึกดิบตามที่ค่ายประกาศ", () => {
+  it("ใช้ชื่อที่ค่ายประกาศมาตรง ๆ ไม่แปลงเป็นชื่อที่คนเรียก", () => {
     withProps({ clientId: "abc", clientName: "Google" });
-    expect(resolveAuthor(undefined, "Google=Gemini").name).toBe("Gemini");
+    expect(resolveAuthor().name).toBe("Google");
   });
 
   it("ไม่แตะ client ที่เป็นตัวตนจริง", () => {
     withProps({ clientId: "abc", clientName: "Google" });
-    expect(resolveAuthor(undefined, "Google=Gemini").client).toBe("abc");
+    expect(resolveAuthor().client).toBe("abc");
   });
 
-  it("ชื่อที่ไม่อยู่ในตารางปล่อยผ่านตามเดิม", () => {
-    withProps({ clientId: "abc", clientName: "Claude" });
-    expect(resolveAuthor(undefined, "Google=Gemini").name).toBe("Claude");
-  });
-
-  it("ตั้งหลายคู่ได้", () => {
-    withProps({ clientId: "abc", clientName: "Foo" });
-    expect(resolveAuthor(undefined, "Google=Gemini, Foo = Bar").name).toBe("Bar");
-  });
-
-  it.each([
-    ["ไม่ได้ตั้งเลย", undefined],
-    ["ว่างเปล่า", ""],
-    ["ไม่มีเครื่องหมายเท่ากับ", "Google"],
-    ["ฝั่งซ้ายว่าง", "=Gemini"],
-    ["ฝั่งขวาว่าง", "Google="],
-    ["มีแต่ comma", ",,,"],
-  ])("%s → ใช้ชื่อเดิม ไม่พัง", (_label, aliases) => {
-    withProps({ clientId: "abc", clientName: "Google" });
-    expect(resolveAuthor(undefined, aliases).name).toBe("Google");
+  it("ชื่อที่มีคำต่อท้ายไม่ถูกตัดหรือย่อ", () => {
+    withProps({ clientId: "abc", clientName: "Codex Bot OAuth Pilot" });
+    expect(resolveAuthor().name).toBe("Codex Bot OAuth Pilot");
   });
 
   it("ไม่แตะเส้น static bearer", () => {
     withProps(undefined);
-    expect(resolveAuthor(config("Claude Code"), "Claude Code=อย่างอื่น").name).toBe(
-      "Claude Code",
-    );
+    expect(resolveAuthor(config("Claude Code")).name).toBe("Claude Code");
   });
 });
 

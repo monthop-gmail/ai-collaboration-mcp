@@ -19,7 +19,6 @@
   // `.invalid` เป็น TLD ที่ RFC 2606 สงวนไว้และแก้เป็น IP ไม่ได้ ถ้ามีคนเผลอเอา
   // ชุดนี้ไปใช้กับของจริง จะต่อไม่ติดทันที ไม่ใช่ต่อติดแล้วเชื่อโทเคนผิดชุด
   "vars": {
-    "CLIENT_NAME_ALIASES": "Google=Gemini",
     "GATEWAY_JWT_ISSUER": "https://internal-mcp-gateway-test.monthop-gmail.workers.dev/mcp",
     "GATEWAY_JWT_AUDIENCE": "mcp://internal-mcp-gateway-test.monthop-gmail.workers.dev/connector/collab-readonly-test",
     "GATEWAY_CONNECTOR_ID": "collab-readonly-test",

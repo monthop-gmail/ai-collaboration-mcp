@@ -125,7 +125,7 @@ const Summary = z
   );
 
 export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
-  const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
+  const author = () => resolveAuthor(staticIdentity);
 
   registerTool(
     server,

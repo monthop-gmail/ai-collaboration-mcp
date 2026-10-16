@@ -45,7 +45,7 @@ const TRUNCATED_CONTEXT_WARNING =
   "กระทู้ที่เงียบแล้ว · more discussions than returned: raise 'limit' or pass 'quiet_for_days'";
 
 export function registerTools(server: McpServer, env: Env, staticIdentity?: StaticIdentity): void {
-  const author = () => resolveAuthor(staticIdentity, env.CLIENT_NAME_ALIASES);
+  const author = () => resolveAuthor(staticIdentity);
 
   registerWorkTools(server, env, staticIdentity);
 

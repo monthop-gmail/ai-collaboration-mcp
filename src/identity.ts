@@ -54,33 +54,6 @@ interface AuthorProps {
   clientName: string;
 }
 
-/**
- * แปลงชื่อที่ค่ายส่งมาให้เป็นชื่อที่คนเรียกกัน
- *
- * Google ลงทะเบียนตัวเองด้วยชื่อ `Google` ทั้งที่คนเรียกผลิตภัณฑ์นั้นว่า Gemini
- * ผู้อ่านกระทู้จึงงงว่าใครพูด
- *
- * ตั้งผ่าน env แทนการเขียนชื่อค่ายลงในโค้ด เพราะกติกาของโปรเจกต์นี้คือห้ามแตกเงื่อนไข
- * ตามผู้ให้บริการ ตารางนี้เปลี่ยน **ป้ายชื่อ** อย่างเดียว ไม่มี logic ไหนทำงานต่างกัน
- * ตามค่าย และ `client` ที่เป็นตัวตนจริงไม่ถูกแตะเลย
- */
-function parseAliases(raw: string | undefined): Map<string, string> {
-  const aliases = new Map<string, string>();
-  if (!raw) return aliases;
-
-  for (const entry of raw.split(",")) {
-    const separator = entry.indexOf("=");
-    if (separator === -1) continue;
-
-    const from = entry.slice(0, separator).trim();
-    const to = entry.slice(separator + 1).trim();
-    if (from === "" || to === "") continue;
-
-    aliases.set(from, to);
-  }
-  return aliases;
-}
-
 function readProps(props: Record<string, unknown>): AuthorProps | undefined {
   const { clientId, clientName } = props;
   if (typeof clientId !== "string" || clientId === "") return undefined;
@@ -97,21 +70,20 @@ function readProps(props: Record<string, unknown>): AuthorProps | undefined {
  * ตั้งชื่อให้ผ่าน `STATIC_CLIENT_NAME` ได้ ไม่งั้นข้อความจากเส้นทางนั้นจะกองรวมกัน
  * เป็นชื่อเดียวโดยแยกไม่ออกว่าเครื่องไหน
  */
-export function resolveAuthor(
-  staticIdentity?: StaticIdentity,
-  nameAliases?: string,
-): Author {
+export function resolveAuthor(staticIdentity?: StaticIdentity): Author {
   const props = getMcpAuthContext()?.props;
   const parsed = props ? readProps(props) : undefined;
 
   // OAuth ชนะเสมอ — client ที่ผ่าน OAuth แล้วส่ง header ชื่ออื่นมาด้วย จะปลอมตัว
   // เป็นคนอื่นไม่ได้
   if (parsed) {
-    const aliases = parseAliases(nameAliases);
-    return {
-      client: parsed.clientId,
-      name: aliases.get(parsed.clientName) ?? parsed.clientName,
-    };
+    // ชื่อถูกบันทึกตรงตามที่ค่ายประกาศมาตอน DCR ไม่แปลงเป็นชื่ออื่น
+    //
+    // เคยมีตาราง alias ตรงนี้ (`CLIENT_NAME_ALIASES="Google=Gemini"`) เลิกใช้แล้ว
+    // 16 ต.ค. 2026 เพราะมันจับที่ **ชื่อ** ไม่ใช่ `client_id` ชื่อเดียวที่มีหลาย
+    // client จึงถูกเปลี่ยนป้ายพร้อมกันทั้งหมด แก้ของที่ควรแก้ไม่ได้และลากของที่
+    // ไม่เกี่ยวไปด้วย · เหตุผลเต็มอยู่ใน NOTES.md
+    return { client: parsed.clientId, name: parsed.clientName };
   }
 
   if (!staticIdentity) return { client: STATIC_BEARER_CLIENT, name: "Static bearer" };
