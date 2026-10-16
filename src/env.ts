@@ -70,11 +70,6 @@ export interface Env {
    */
   GATEWAY_JWKS_SOURCE?: string;
   /**
-   * แก้ชื่อที่แสดง เมื่อชื่อที่ค่ายส่งมาตอน DCR ไม่ตรงกับชื่อที่คนเรียกกัน
-   * รูปแบบ `ชื่อที่ส่งมา=ชื่อที่จะแสดง` คั่นด้วย comma เช่น `Google=Gemini`
-   */
-  CLIENT_NAME_ALIASES?: string;
-  /**
    * รหัสที่พิสูจน์ว่าคนอยู่ตรงนั้นจริงตอนปิด decision
    *
    * แยกจาก `MCP_AUTH_TOKEN` โดยตั้งใจ และ **ห้ามใส่ในเครื่องมือของ client ตัวไหน**
