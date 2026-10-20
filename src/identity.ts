@@ -64,6 +64,19 @@ function readProps(props: Record<string, unknown>): AuthorProps | undefined {
 }
 
 /**
+ * คู่ `clientId` / `clientName` จาก props ที่ผนึกไว้ในโทเคน — `undefined` เมื่อไม่ใช่ OAuth
+ *
+ * แยกออกมาจาก `resolveAuthor()` เพราะนโยบายจำกัดสิทธิ์ (`client-policy.ts`) ต้องใช้
+ * **คู่ดิบ** ไม่ใช่ `Author` ที่ถูกเติมค่าสำรองของเส้น static แล้ว — ถ้าใช้ `Author`
+ * ผู้เรียกทาง static bearer ที่ `STATIC_CLIENT_NAME` ตั้งชื่อตรงกับคลาสที่ถูกจำกัดพอดี
+ * จะถูกตีความว่าอยู่ในคลาสนั้น ทั้งที่นโยบายผูกกับ OAuth โดยเจตนา
+ */
+export function oauthClient(): { clientId: string; clientName: string } | undefined {
+  const props = getMcpAuthContext()?.props;
+  return props ? readProps(props) : undefined;
+}
+
+/**
  * ใครเป็นคนเรียก tool นี้
  *
  * เส้นทาง static bearer (Claude Code, curl) ไม่ผ่าน OAuth จึงไม่มี props ให้อ่าน

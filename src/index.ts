@@ -6,7 +6,8 @@ import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
 import { handleView } from "./view";
 import { nameForToken, staticIdentityFor, type StaticIdentity } from "./identity";
-import { withReadOnlyGuard } from "./readonly";
+import { READ_ONLY_TOOLS, withReadOnlyGuard } from "./readonly";
+import { allowedToolsFor, resolvePolicy, type PolicyDecision } from "./client-policy";
 import {
   createAdapter,
   jwksSourceMismatch,
@@ -48,7 +49,48 @@ const handlers = new WeakMap<object, Map<string, StatelessMcpHandler>>();
  */
 const MAX_CACHED_HANDLERS = 32;
 
-function getHandler(env: Env, identity?: StaticIdentity, readOnly = false): StatelessMcpHandler {
+/**
+ * ส่วนของ cache key ที่มาจากนโยบายราย client
+ *
+ * `denied` ใช้ถังเดียวกันทุกชื่อโดยเจตนา — ถ้าใส่ชื่อลงใน key ผู้ที่ลงทะเบียน DCR
+ * ด้วยชื่อใหม่ซ้ำ ๆ จะสร้าง handler ใหม่ได้ไม่รู้จบ ซึ่งเป็นปัญหาเดียวกับที่
+ * `MAX_CACHED_HANDLERS` มีไว้กัน · แชร์ได้เพราะ handler ของ `denied` ปิด tool
+ * ทุกตัวเหมือนกันหมด และเหตุผลที่คืนให้ผู้เรียกถูกคำนวณสดจาก props ทุกครั้งที่เรียก
+ */
+function policyKey(policy: PolicyDecision): string {
+  switch (policy.kind) {
+    case "restricted":
+      return `pol:${policy.policy.client_id}`;
+    case "denied":
+      return "pol:denied";
+    case "unrestricted":
+      return "";
+  }
+}
+
+/**
+ * server ที่ถูกห่อตามนโยบาย — `withReadOnlyGuard` รับ allowlist เป็นอาร์กิวเมนต์
+ * อยู่แล้ว จึงไม่ต้องมีกลไกใหม่
+ *
+ * เมื่ออยู่บนเส้น read-only ด้วย ใช้ **ส่วนร่วม** ของสองรายการ ไม่ใช่ของนโยบาย
+ * อย่างเดียว — วันนี้กรณีนี้เกิดไม่ได้เพราะนโยบายผูกกับ OAuth และเส้น read-only
+ * ไม่ผูกกับ OAuth provider แต่เขียนให้ถูกไว้ก่อน ดีกว่าเปิดสิทธิ์คืนให้เงียบ ๆ
+ * ในวันที่มีคนต่อสองเส้นนี้เข้าหากัน
+ */
+function guardFor(server: McpServer, readOnly: boolean, policy: PolicyDecision): McpServer {
+  const allow = allowedToolsFor(policy);
+  if (!allow) return readOnly ? withReadOnlyGuard(server) : server;
+
+  const effective = readOnly ? allow.filter((name) => READ_ONLY_TOOLS.includes(name)) : allow;
+  return withReadOnlyGuard(server, effective);
+}
+
+function getHandler(
+  env: Env,
+  identity?: StaticIdentity,
+  readOnly = false,
+  policy: PolicyDecision = { kind: "unrestricted" },
+): StatelessMcpHandler {
   let byIdentity = handlers.get(env as object);
   if (!byIdentity) {
     byIdentity = new Map();
@@ -57,14 +99,17 @@ function getHandler(env: Env, identity?: StaticIdentity, readOnly = false): Stat
 
   // เส้นทางเป็นส่วนหนึ่งของ key ไม่งั้น handler ที่ถูก cache ไว้จากเส้นหนึ่งจะถูก
   // หยิบไปใช้กับอีกเส้น แล้ว server ที่ปิด tool ไว้จะกลายเป็นเปิด
-  const key = `${readOnly ? "ro" : "rw"}|${identity ? `${identity.source}:${identity.name}` : ""}`;
+  // นโยบายอยู่ใน key ด้วย เพราะ allowlist ถูกฝังตอน **ประกอบ** server ไม่ใช่ตอนเรียก
+  // — ถ้าไม่ใส่ handler ของ client ที่ถูกจำกัดจะถูกหยิบไปใช้กับ client อื่น แล้วนโยบาย
+  // จะรั่วข้ามผู้เรียก ซึ่งเป็นแผลเดียวกับที่ `readOnly` ถูกใส่ลงใน key ไว้ก่อนหน้านี้
+  const key = `${readOnly ? "ro" : "rw"}|${policyKey(policy)}|${identity ? `${identity.source}:${identity.name}` : ""}`;
   const cached = byIdentity.get(key);
   if (cached) return cached;
 
   const handler = createMcpHandler(
     () => {
       const server = new McpServer({ name: "ai-collaboration", version: "0.1.0" });
-      registerTools(readOnly ? withReadOnlyGuard(server) : server, env, identity);
+      registerTools(guardFor(server, readOnly, policy), env, identity);
       return server;
     },
     { route: readOnly ? MCP_READONLY_ROUTE : MCP_ROUTE, ...originOptions(env) },
@@ -99,12 +144,27 @@ async function serveMcp(
   readOnly: boolean,
   resolved?: StaticIdentity,
 ): Promise<Response> {
+    // นโยบายราย client ต้องรู้ **ก่อน** ประกอบ server เพราะ allowlist ถูกฝังตอน
+    // ลงทะเบียน tool ไม่ใช่ตอนเรียก
+    //
+    // `ctx.props` คือทางที่ OAuth provider ส่ง props ที่ถอดรหัสแล้วมาให้ apiHandler
+    // ซึ่งต่างจาก `getMcpAuthContext()` ที่ใช้ใน `resolveAuthor()` — ตัวนั้นถูกตั้งโดย
+    // `createMcpHandler` และอ่านได้เฉพาะ *ข้างใน* handler จึงสายเกินไปสำหรับชั้นนี้
+    //
+    // ไม่ใช่ OAuth = ไม่มี props = `unrestricted` ซึ่งถูกต้อง เพราะนโยบายผูกกับ
+    // OAuth `client_id` โดยเจตนาตาม dec-f213c339 ข้อ 4
+    const props = (ctx as ExecutionContext & { props?: Record<string, unknown> }).props;
+    const policy = resolvePolicy(
+      typeof props?.clientId === "string" ? props.clientId : undefined,
+      typeof props?.clientName === "string" ? props.clientName : undefined,
+    );
+
     // ตัวตนที่ตัดสินมาแล้วชนะทุกอย่าง และทำให้ไม่ต้องอ่าน `X-Client-Name` เลย
     //
     // ข้อนี้คือเงื่อนไข "spoofed X-Client-Name ไม่มีผลต่อ actor" ของใบงาน — ไม่ได้
     // ทำด้วยการเทียบแล้วทิ้ง แต่ด้วยการไม่เคยอ่านมันบนเส้นทางนั้น การเทียบแล้วทิ้ง
     // ยังเปิดช่องให้ใครสลับลำดับทีหลังแล้วมันกลับมามีผล
-    if (resolved) return getHandler(env, resolved, readOnly)(request, env, ctx);
+    if (resolved) return getHandler(env, resolved, readOnly, policy)(request, env, ctx);
 
     // คำนวณชื่อสำรองให้ทุกคำขอ ไม่ต้องแยกว่ามาทางไหน เพราะ `resolveAuthor` ให้
     // ตัวตนจาก OAuth ชนะเสมอเมื่อมี — ชื่อจาก header หรือจากโทเค็นจึงมีผลเฉพาะ
@@ -120,7 +180,7 @@ async function serveMcp(
       return json({ error: "invalid_client_name", detail: identity.reason }, 400);
     }
 
-  return getHandler(env, identity.identity, readOnly)(request, env, ctx);
+  return getHandler(env, identity.identity, readOnly, policy)(request, env, ctx);
 }
 
 const mcpApiHandler = {
