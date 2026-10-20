@@ -9,8 +9,9 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { DEFAULT_WORKSPACE } from "./env";
-import { mechanismOfClient } from "./identity";
+import { mechanismOfClient, oauthClient } from "./identity";
 import { RequestError } from "./db";
+import { argumentRefusal, resolvePolicy } from "./client-policy";
 
 /**
  * เลข contract ของรูปผลลัพธ์ที่ tool คืน — จำนวนเต็ม ไม่ใช่ semver
@@ -57,13 +58,39 @@ export function registerTool<Schema extends z.ZodType>(
     description: `contract ${CONTRACT_VERSION}\n\n${config.description}`,
   };
 
+  /**
+   * ด่านระดับ argument ของนโยบายราย client — **จุดเดียวที่ครอบ tool ทุกตัว**
+   *
+   * วางที่นี่เพราะ `registerTool` คือตัวห่อที่ tool ทุกตัวผ่าน (17 จุดเรียกวันนี้)
+   * ถ้าไปเช็กในแต่ละ tool แทน tool ตัวที่สิบแปดที่ใครเพิ่มทีหลังจะไม่มีด่าน
+   * **โดยไม่มีอะไรฟ้อง**
+   *
+   * ชั้นนี้ทำงานตอน *เรียก* ต่างจากชั้น tool ที่ทำงานตอน *ประกอบ server* — ชั้นนั้น
+   * ปิด tool ที่ไม่อยู่ในรายการไปแล้ว การตรวจชื่อ tool ซ้ำที่นี่จึงเป็น defence-in-depth
+   * โดยเจตนา ไม่ใช่ด่านหลัก · มีไว้เผื่อวันหนึ่งมีเส้นทางใหม่ที่ประกอบ server โดยไม่
+   * ผ่าน guard — ตั้งใจให้เหลือไว้ และบันทึกไว้ว่าทำไม ไม่ใช่โค้ดที่ใครลืมลบ
+   *
+   * ผ่าน `formatError` ตัวเดียวกับความล้มเหลวอื่น เพื่อให้ผู้เรียกเห็นรูปผลลัพธ์เดิม
+   * ไม่ใช่ error ระดับโปรโตคอลที่อ่านไม่รู้ว่าถูกปฏิเสธเพราะอะไร
+   */
+  const guarded = async (args: z.infer<Schema>) => {
+    const caller = oauthClient();
+    const refusal = argumentRefusal(
+      resolvePolicy(caller?.clientId, caller?.clientName),
+      name,
+      args,
+    );
+    if (refusal !== undefined) return formatError(new RequestError(refusal));
+    return handler(args);
+  };
+
   // cast จุดเดียวตรงนี้ เพราะ signature จริงของ registerTool เป็น generic ที่ infer
   // จาก schema — ห่อแล้ว TypeScript ตามต่อไม่ได้ ส่วน type ที่ผู้เรียกเห็นยังครบ
   // เพราะ `handler` ผูกกับ `Schema` ตัวเดียวกับ `inputSchema` ข้างบน
-  (server.registerTool as (n: string, c: typeof described, h: typeof handler) => void)(
+  (server.registerTool as (n: string, c: typeof described, h: typeof guarded) => void)(
     name,
     described,
-    handler,
+    guarded,
   );
 }
 
