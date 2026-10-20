@@ -3,7 +3,9 @@
  *
  * อนุมัติโดย `dec-f213c339` (approved + human 20 ต.ค. 2026) ตามข้อเสนอที่
  * `dis-683004a2` #20–#21 และข้อแก้ข้อเท็จจริงที่ #24 · ลูกค้ารายแรกคือ
- * `Orchestrator Bot` ซึ่งต้องเดินงานแทน session ที่มีคนนั่ง โดยไม่ได้สิทธิ์เต็มชุด
+ * `Orchestrator Bot` ซึ่งต้องเดินงานแทน session ที่มีคนนั่ง โดยไม่ได้สิทธิ์เต็มชุด ·
+ * โหมด live (เขียน task/handoff ได้เฉพาะของตัวเอง) อนุมัติโดย `dec-020d7bb3`
+ * (`dis-683004a2#75`)
  *
  * ## ทำไมนโยบายอยู่ในซอร์ส ไม่ใช่ใน D1
  *
@@ -37,38 +39,52 @@ export interface ClientPolicy {
   /** `client_id` ที่ออกให้ตอนลงทะเบียน DCR — ตัวที่นโยบายนี้ใช้กับมัน */
   readonly client_id: string;
   /**
+   * `client_id` ใบอื่นของ client เชิงตรรกะเดียวกัน (เช่นหลังลงทะเบียน DCR ใหม่)
+   *
+   * `resolvePolicy` และการตรวจเจ้าของ task ใช้ **เซตเดียวกัน** คือ `client_id ∪ also_ids`
+   * (`policyIds()`) — ใบใหม่จึงแก้ task ที่สร้างด้วยใบเก่าได้ · ต้องเป็น list เสมอ
+   * แม้ว่าง (`dec-020d7bb3` ข้อ 1)
+   */
+  readonly also_ids: readonly string[];
+  /**
    * ชื่อที่ client ประกาศตอน DCR — ใช้จับคลาส ไม่ใช่ยืนยันตัวตน
    *
-   * ชื่อนี้ตรงแต่ `client_id` ไม่ตรง = ปฏิเสธ ไม่ใช่ปล่อยผ่าน
+   * ชื่อนี้ตรงแต่ `client_id` ไม่ตรง = ปฏิเสธ ไม่ใช่ปล่อยผ่าน · และ **ไม่มี fallback**
+   * จากชื่อหรือ header ไปหานโยบาย — ชื่อทำได้อย่างเดียวคือทำให้ถูกปฏิเสธ
    */
   readonly client_name: string;
   /** tool ที่เรียกได้ · ที่ไม่อยู่ในนี้ถูก disable และปฏิเสธเมื่อเรียกตรง */
   readonly tools: readonly string[];
   /**
-   * `discussion_id` ที่ `post_message` โพสต์ลงได้
+   * allowlist ของกระทู้ — คงที่ต่อ deploy
    *
-   * ว่าง = โพสต์ไม่ได้เลย ไม่ใช่โพสต์ได้ทุกกระทู้ · ถ้า `post_message` ไม่อยู่ใน
-   * `tools` ค่านี้ไม่มีความหมาย เพราะ tool ถูกปิดไปก่อนแล้ว
+   * ใช้กับ `post_message` (ปลายทาง) · `create_task` (`discussion_id`) · และเป็น
+   * allowlist *ปัจจุบัน* ที่ `create_handoff`/`update_task` ใช้ตรวจกระทู้ของ task ที่จะแตะ —
+   * task ที่สร้างไว้ตอนกระทู้ยังอยู่ในรายการ แต่วันนี้ถูกถอดออกแล้ว **แตะไม่ได้**
+   *
+   * ว่าง = ทำอะไรไม่ได้เลย ไม่ใช่ทำได้ทุกกระทู้
    */
-  readonly post_message_discussions: readonly string[];
+  readonly discussions: readonly string[];
+  /** ชื่อ worker ที่ `create_task.assigned_to` และ `create_handoff.to` ชี้ไปได้ */
+  readonly workers: readonly string[];
+  /** workspace เดียวที่ `create_task` เขียนลงได้ — ละได้ (ค่าตั้งต้นคือค่านี้พอดี) แต่ระบุอื่นไม่ได้ */
+  readonly workspace: string;
 }
 
 /**
  * รายการนโยบายทั้งหมด — เพิ่มได้เฉพาะที่มีใบตัดสินรองรับ
  *
- * ของแรกและของเดียววันนี้: `Orchestrator Bot` ตาม `dec-f213c339` ข้อ 5 · รายชื่อ
- * ห้า tool มาจากที่ Codex ระบุเองว่าสเปกใช้จริงที่ `dis-683004a2#23` ไม่ใช่ที่ฮับเดา
- * (allowlist ของเส้น `/mcp-readonly` มีเจ็ดตัว ซึ่งไม่เท่ากัน และไม่ใช่รายการที่ใช้ตรงนี้)
+ * ของแรกและของเดียววันนี้: `Orchestrator Bot` · ห้า tool อ่านตาม `dec-f213c339` ข้อ 5
+ * (Codex ระบุเองที่ `dis-683004a2#23`) · สี่ tool เขียนตาม `dec-020d7bb3` ข้อ 2 ซึ่ง
+ * ทุกตัวถูกคุมด้วยตาราง `ARGUMENT_RULES` ข้างล่าง ไม่ใช่เปิดเปล่า ๆ
  *
- * `post_message` จำกัดไว้ที่กระทู้ notify ของ shadow กระทู้เดียว ซึ่ง operator เปิดให้
- * และ runtime ไม่เปิดกระทู้เอง — จึงไม่ต้องมี `create_discussion` ที่จำกัดด้วย
- * argument ไม่ได้เลย
- *
- * **รายชื่อ tool สำหรับโหมด live ยังไม่อนุมัติ** ต้องมีใบแยกตาม `dec-f213c339` ข้อ 5
+ * ไม่มี `create_discussion` · `accept_handoff` · กลุ่ม decision/plan — จำกัดด้วย
+ * argument ไม่ได้ หรือไม่อยู่ในใบตัดสิน
  */
 export const CLIENT_POLICIES: readonly ClientPolicy[] = [
   {
     client_id: "WL3lHS7PwXbT3a6N",
+    also_ids: [],
     client_name: "Orchestrator Bot",
     tools: [
       "get_tasks",
@@ -77,10 +93,24 @@ export const CLIENT_POLICIES: readonly ClientPolicy[] = [
       "get_decisions",
       "get_workspace_context",
       "post_message",
+      "create_task",
+      "create_handoff",
+      "update_task",
     ],
-    post_message_discussions: ["dis-763ed26c-0f27-4d95-ba9f-939d4c41ebb3"],
+    discussions: [
+      "dis-763ed26c-0f27-4d95-ba9f-939d4c41ebb3", // notify
+      "dis-70b78bd9-5bd5-44af-8fd6-81a8ff2fd610", // s1
+      "dis-a56d8e9e-cee9-485d-8749-3ca227c96920", // s2
+    ],
+    workers: ["Claude Code Bot"],
+    workspace: "ws-001",
   },
 ];
+
+/** เซต id ของ client เชิงตรรกะ — ใช้ทั้งตอนหานโยบายและตอนตรวจเจ้าของ task */
+export function policyIds(policy: ClientPolicy): readonly string[] {
+  return [policy.client_id, ...policy.also_ids];
+}
 
 /**
  * ผลของการหานโยบาย — สามค่า ไม่ใช่สอง
@@ -97,8 +127,8 @@ export type PolicyDecision =
 /**
  * นโยบายของผู้เรียกรายนี้
  *
- * ลำดับสำคัญ — เทียบ `client_id` ก่อน ถ้าตรงใช้นโยบายนั้นเลยโดยไม่ดูชื่อ เพราะ
- * `client_id` คือตัวตนที่ผนึกมาในโทเคนและ client แก้ไม่ได้ ส่วนชื่อเป็นคำประกาศ
+ * ลำดับสำคัญ — เทียบ `client_id ∪ also_ids` ก่อน ถ้าตรงใช้นโยบายนั้นเลยโดยไม่ดูชื่อ
+ * เพราะ `client_id` คือตัวตนที่ผนึกมาในโทเคนและ client แก้ไม่ได้ ส่วนชื่อเป็นคำประกาศ
  *
  * @param clientId   `client_id` จาก props ที่ผนึกไว้ในโทเคน (OAuth เท่านั้น)
  * @param clientName ชื่อที่ประกาศตอน DCR
@@ -111,7 +141,7 @@ export function resolvePolicy(
   // เส้นที่ไม่ใช่ OAuth ไม่มี client_id ที่ผนึกมา จึงไม่เคยอยู่ในนโยบาย —
   // นโยบายนี้ผูกกับ OAuth โดยเจตนา ตาม dec-f213c339 ข้อ 4
   if (clientId) {
-    const byId = policies.find((entry) => entry.client_id === clientId);
+    const byId = policies.find((entry) => policyIds(entry).includes(clientId));
     if (byId) return { kind: "restricted", policy: byId };
   }
 
@@ -127,7 +157,7 @@ export function resolvePolicy(
         reason:
           `ชื่อ '${clientName}' อยู่ในคลาสที่มีนโยบายจำกัดสิทธิ์ แต่ client_id ที่ใช้เรียก` +
           "ไม่อยู่ในนโยบาย — ปฏิเสธไว้ก่อน (fail-closed) · เกิดเมื่อลงทะเบียน DCR ใหม่" +
-          "แล้วได้ client_id ใหม่ · ผู้ดูแลต้องเติม client_id ใหม่เข้านโยบายใน " +
+          "แล้วได้ client_id ใหม่ · ผู้ดูแลต้องเติม client_id ใหม่เข้า also_ids ของนโยบายใน " +
           "src/client-policy.ts แล้ว deploy ก่อนใช้งานต่อ",
       };
     }
@@ -175,21 +205,154 @@ export function effectiveAllowlist(
   return allow.filter((name) => readOnlyTools.includes(name));
 }
 
+/** คำปฏิเสธ (string) หรือผ่าน (`undefined`) */
+type Refusal = string | undefined;
+type Rule = (policy: ClientPolicy, args: Record<string, unknown>, db: D1Database) => Promise<Refusal>;
+
+/**
+ * คิวรีเดียวที่ด่านนี้ยิงเพิ่ม — export เพื่อให้เทสต์ยืนยันได้ว่า **ไม่ถูกยิง**
+ * สำหรับ client ที่ไม่ถูกจำกัด (`dec-020d7bb3` ข้อ 8: ต้นทุนศูนย์สำหรับคนที่ไม่เกี่ยว)
+ */
+export const OWNERSHIP_SQL =
+  "SELECT created_by_client, discussion_id FROM tasks WHERE id = ?1 /* client-policy ownership */";
+
+/**
+ * ข้อความเดียวสำหรับ "ไม่มี task นี้" และ "มีแต่ไม่ใช่ของ client นี้" (ข้อ 6) —
+ * ถ้าแยกข้อความ client ที่ถูกจำกัดจะใช้มันไล่สแกนว่า task id ไหนมีจริงได้
+ */
+function notOwnedRefusal(taskId: string): string {
+  return (
+    `task '${taskId}' ไม่พบ หรือไม่ได้สร้างโดย client นี้ — client นี้แก้หรือส่งต่อได้` +
+    "เฉพาะ task ที่ตัวเองสร้าง (ตรวจจาก created_by_client)"
+  );
+}
+
+/**
+ * ด่านระดับแถว — task ต้องสร้างโดย id ในเซตของ client นี้ **และ** อยู่ในกระทู้ที่อยู่ใน
+ * allowlist *ปัจจุบัน*
+ *
+ * อ่าน D1 หนึ่งครั้ง · ถ้าอ่านไม่ได้ (D1 โยน error) → ปฏิเสธ ไม่ใช่ปล่อย (ข้อ 7) —
+ * ด่านที่ล้มแล้วเปิด ไม่ใช่ด่าน
+ */
+async function ownedTaskRefusal(
+  policy: ClientPolicy,
+  taskId: unknown,
+  db: D1Database,
+): Promise<Refusal> {
+  if (typeof taskId !== "string" || taskId === "") return notOwnedRefusal(String(taskId));
+
+  let row: { created_by_client: string; discussion_id: string | null } | null;
+  try {
+    row = await db
+      .prepare(OWNERSHIP_SQL)
+      .bind(taskId)
+      .first<{ created_by_client: string; discussion_id: string | null }>();
+  } catch (error) {
+    console.error("client-policy ownership read failed", error);
+    return (
+      `ตรวจเจ้าของ task '${taskId}' ไม่ได้เพราะฐานข้อมูลตอบผิดพลาด — ` +
+      "ปฏิเสธไว้ก่อน (fail-closed) ลองใหม่ภายหลัง"
+    );
+  }
+
+  if (!row || !policyIds(policy).includes(row.created_by_client)) return notOwnedRefusal(taskId);
+
+  if (row.discussion_id === null || !policy.discussions.includes(row.discussion_id)) {
+    return (
+      `task '${taskId}' อยู่ในกระทู้ที่ไม่อยู่ใน allowlist ปัจจุบันของ client นี้ — ` +
+      `แตะได้เฉพาะ task ในกระทู้ ${policy.discussions.join(", ") || "(ไม่มี)"}`
+    );
+  }
+  return undefined;
+}
+
+function discussionRefusal(policy: ClientPolicy, tool: string, target: unknown): Refusal {
+  if (typeof target === "string" && policy.discussions.includes(target)) return undefined;
+  return (
+    `${tool} ของ client นี้ถูกจำกัดไว้เฉพาะกระทู้ที่นโยบายระบุ — ต้องส่ง discussion_id และ` +
+    `ใช้ได้เฉพาะ ${policy.discussions.join(", ") || "(ไม่มี)"}`
+  );
+}
+
+function workerRefusal(policy: ClientPolicy, field: string, target: unknown): Refusal {
+  if (typeof target === "string" && policy.workers.includes(target)) return undefined;
+  return (
+    `${field} ของ client นี้ต้องเป็น worker ในรายการเท่านั้น — ` +
+    `${policy.workers.join(", ") || "(ไม่มี)"}`
+  );
+}
+
+/** ฟิลด์ที่ `update_task` ของ client ที่ถูกจำกัดส่งได้ · `assigned_to` ไม่อยู่ในนี้ ทุกค่ารวม null */
+const UPDATE_TASK_FIELDS: ReadonlySet<string> = new Set([
+  "task_id",
+  "status",
+  "detail",
+  "result_ref",
+  "acting_context",
+]);
+const UPDATE_TASK_STATUSES: ReadonlySet<string> = new Set(["done", "blocked"]);
+
+/**
+ * กฎระดับ argument ราย tool — **ตารางตรงตัว ไม่ใช่กลไกทั่วไป** (`dec-020d7bb3` ข้อ 9)
+ *
+ * ตัวกรองที่ถูกครึ่งเดียวแย่กว่าไม่มีตัวกรอง เพราะผู้อ่านจะเชื่อว่ากรองแล้ว (บทเรียน
+ * ไมเกรชัน 0007) · tool เขียนที่อยู่ใน `tools` แต่ไม่มีแถวในตารางนี้จึง **ถูกปฏิเสธ**
+ * ไม่ใช่ปล่อยผ่าน — ดู `argumentRefusal`
+ *
+ * ลำดับในแต่ละแถว: ตรวจ argument ที่ไม่ต้องอ่าน D1 ก่อน แล้วค่อยอ่าน D1 ครั้งเดียว
+ */
+const ARGUMENT_RULES: Readonly<Record<string, Rule>> = {
+  post_message: async (policy, args) => discussionRefusal(policy, "post_message", args.discussion_id),
+
+  create_task: async (policy, args) => {
+    const byDiscussion = discussionRefusal(policy, "create_task", args.discussion_id);
+    if (byDiscussion) return byDiscussion;
+    const byWorker = workerRefusal(policy, "create_task.assigned_to", args.assigned_to);
+    if (byWorker) return byWorker;
+    // ละได้ (ค่าตั้งต้นของ server คือ ws-001 อยู่แล้ว) · ค่าอื่นทุกค่า รวม null และ ""
+    // ปฏิเสธก่อนเขียน — ไม่ปล่อยให้ค่าว่างตกไปเป็นค่าตั้งต้นเงียบ ๆ
+    if (args.workspace !== undefined && args.workspace !== policy.workspace) {
+      return `create_task ของ client นี้เขียนได้เฉพาะ workspace '${policy.workspace}' — ละ workspace ไว้หรือระบุค่านี้เท่านั้น`;
+    }
+    return undefined;
+  },
+
+  create_handoff: async (policy, args, db) => {
+    const byWorker = workerRefusal(policy, "create_handoff.to", args.to);
+    if (byWorker) return byWorker;
+    return ownedTaskRefusal(policy, args.task_id, db);
+  },
+
+  update_task: async (policy, args, db) => {
+    // `assigned_to` ห้ามทุกค่า รวม null — ตรวจจากการ *มีคีย์* ไม่ใช่จากค่า
+    const stray = Object.keys(args).filter((key) => !UPDATE_TASK_FIELDS.has(key));
+    if (stray.length > 0) {
+      return (
+        `update_task ของ client นี้ส่งได้เฉพาะ ${[...UPDATE_TASK_FIELDS].join(", ")} — ` +
+        `พบ ${stray.join(", ")} (assigned_to เปลี่ยนไม่ได้ทุกค่า รวม null · ส่งต่องานให้ใช้ create_handoff)`
+      );
+    }
+    if (args.status !== undefined && !UPDATE_TASK_STATUSES.has(String(args.status))) {
+      return `update_task ของ client นี้ตั้ง status ได้เฉพาะ ${[...UPDATE_TASK_STATUSES].join(", ")}`;
+    }
+    return ownedTaskRefusal(policy, args.task_id, db);
+  },
+};
+
 /**
  * ด่านระดับ argument — เรียกจาก `registerTool()` จุดเดียว ก่อน handler ทำงาน
  *
  * คืนข้อความเมื่อ **ห้าม** และคืน `undefined` เมื่อผ่าน · ให้ผู้เรียกโยน error เอง
  * เพื่อให้โมดูลนี้ไม่ต้องรู้จักชนิด error ของชั้นบน
  *
- * ตรวจเฉพาะ tool ที่นโยบายมีข้อจำกัดระดับ argument จริง ๆ · เขียนเป็นรายชื่อ
- * ไม่ใช่กลไกทั่วไป เพราะตัวกรองที่ถูกครึ่งเดียวแย่กว่าไม่มีตัวกรอง — ผู้อ่านจะเชื่อว่า
- * กรองแล้ว (บทเรียนของไมเกรชัน 0007)
+ * `unrestricted` คืนทันทีโดยไม่แตะ `db` — ต้นทุนศูนย์สำหรับ client ที่ไม่เกี่ยว (ข้อ 8)
  */
-export function argumentRefusal(
+export async function argumentRefusal(
   decision: PolicyDecision,
   toolName: string,
   args: unknown,
-): string | undefined {
+  db: D1Database,
+): Promise<Refusal> {
   if (decision.kind === "denied") return decision.reason;
   if (decision.kind !== "restricted") return undefined;
 
@@ -205,15 +368,14 @@ export function argumentRefusal(
     );
   }
 
-  if (toolName === "post_message") {
-    const target = (args as { discussion_id?: unknown } | null)?.discussion_id;
-    if (typeof target !== "string" || !policy.post_message_discussions.includes(target)) {
-      return (
-        "post_message ของ client นี้ถูกจำกัดไว้เฉพาะกระทู้ที่นโยบายระบุ — " +
-        `โพสต์ได้เฉพาะ ${policy.post_message_discussions.join(", ") || "(ไม่มี)"}`
-      );
-    }
+  const rule = ARGUMENT_RULES[toolName];
+  // tool อ่านไม่มีกฎ argument · tool เขียนที่ไม่มีแถวในตารางต้องไม่หลุด — ปฏิเสธ
+  if (!rule) {
+    return toolName.startsWith("get_")
+      ? undefined
+      : `tool '${toolName}' เปิดในนโยบายแต่ไม่มีกฎ argument ในตาราง — ปฏิเสธไว้ก่อน (fail-closed)`;
   }
 
-  return undefined;
+  const record = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+  return rule(policy, record, db);
 }

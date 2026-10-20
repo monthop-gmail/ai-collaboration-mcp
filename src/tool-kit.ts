@@ -8,7 +8,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { DEFAULT_WORKSPACE } from "./env";
+import { DEFAULT_WORKSPACE, type Env } from "./env";
 import { mechanismOfClient, oauthClient } from "./identity";
 import { RequestError } from "./db";
 import { argumentRefusal, resolvePolicy } from "./client-policy";
@@ -49,6 +49,7 @@ export const CONTRACT_VERSION = 2;
  */
 export function registerTool<Schema extends z.ZodType>(
   server: McpServer,
+  env: Pick<Env, "DB">,
   name: string,
   config: { description: string; inputSchema: Schema },
   handler: (args: z.infer<Schema>) => Promise<unknown>,
@@ -72,13 +73,17 @@ export function registerTool<Schema extends z.ZodType>(
    *
    * ผ่าน `formatError` ตัวเดียวกับความล้มเหลวอื่น เพื่อให้ผู้เรียกเห็นรูปผลลัพธ์เดิม
    * ไม่ใช่ error ระดับโปรโตคอลที่อ่านไม่รู้ว่าถูกปฏิเสธเพราะอะไร
+   *
+   * รับ `env` เพราะด่านระดับแถว (`dec-020d7bb3`) ต้องอ่าน `tasks.created_by_client`
+   * จาก D1 ก่อน handler — เฉพาะ client ที่ถูกจำกัด · client อื่นไม่ถูกอ่านเพิ่ม
    */
   const guarded = async (args: z.infer<Schema>) => {
     const caller = oauthClient();
-    const refusal = argumentRefusal(
+    const refusal = await argumentRefusal(
       resolvePolicy(caller?.clientId, caller?.clientName),
       name,
       args,
+      env.DB,
     );
     if (refusal !== undefined) return formatError(new RequestError(refusal));
     return handler(args);
