@@ -506,19 +506,67 @@ describe("live — create_task", () => {
     expect(refusal(stranger)).toMatch(/worker ในรายการ/);
   });
 
-  for (const workspace of ["ws-002", null, ""]) {
-    it(`workspace ${JSON.stringify(workspace)} → ปฏิเสธก่อนเขียน`, async () => {
-      const before = (await DB.prepare("SELECT count(*) AS n FROM tasks").first<{ n: number }>())!.n;
-      const frame = await callTool(
-        "create_task",
-        { title: "x", detail: "", discussion_id: ALLOWED_THREAD, assigned_to: WORKER, workspace },
-        asOrchestrator,
-      );
-      expect(refusal(frame)).not.toBe("");
-      const after = (await DB.prepare("SELECT count(*) AS n FROM tasks").first<{ n: number }>())!.n;
-      expect(after).toBe(before);
+  /**
+   * F1 (dis-f6cead2d#2) — ด่าน workspace ต้องถูกพิสูจน์ด้วยตัวมันเอง
+   *
+   * ก่อนหน้านี้กรณี ws-002 ผ่านแม้ด่านถูกถอดเป็น `if (false)` เพราะ ws-002 ไม่มีอยู่ใน D1
+   * และ handler ปฏิเสธเองอยู่แล้ว · ตอนนี้ใส่ ws-002 เป็น fixture ให้ handler **รับได้** แล้ว
+   * จับข้อความของด่านตรงตัว พร้อมกลุ่มควบคุมที่ client ไม่ถูกจำกัดสร้างได้ด้วย argument
+   * เดียวกัน — ถ้าด่านหาย กรณีลบจะล้มและกรณีบวกจะยังผ่าน
+   */
+  describe("workspace — ด่านของ client ไม่ใช่ของ handler", () => {
+    const GUARD = /เขียนได้เฉพาะ workspace/;
+    const unrestricted = { clientId: "client-ไม่ถูกจำกัด", clientName: "ChatGPT" };
+    const inWs002 = { title: "x", detail: "", discussion_id: ALLOWED_THREAD, assigned_to: WORKER, workspace: "ws-002" };
+
+    async function countTasks(): Promise<number> {
+      return (await DB.prepare("SELECT count(*) AS n FROM tasks").first<{ n: number }>())!.n;
+    }
+
+    beforeEach(async () => {
+      await DB.prepare(
+        "INSERT INTO workspaces (id, name, created_at) VALUES ('ws-002', 'อีก workspace (fixture)', ?1)",
+      )
+        .bind(new Date().toISOString())
+        .run();
     });
-  }
+
+    it('workspace "ws-002" ที่มีอยู่จริง → ด่านปฏิเสธด้วยข้อความของตัวเอง ไม่เพิ่มแถว', async () => {
+      const before = await countTasks();
+      const frame = await callTool("create_task", inWs002, asOrchestrator);
+      expect(refusal(frame)).toMatch(GUARD);
+      expect(await countTasks()).toBe(before);
+    });
+
+    it("กลุ่มควบคุม — client ที่ไม่ถูกจำกัดสร้างใน ws-002 ด้วย argument เดียวกันได้ (เพิ่มหนึ่งแถว)", async () => {
+      const before = await countTasks();
+      const frame = await callTool("create_task", inWs002, unrestricted);
+      expect(frame.result?.isError ?? false).toBe(false);
+      expect(await countTasks()).toBe(before + 1);
+      const row = await DB.prepare("SELECT workspace_id FROM tasks WHERE id = ?1")
+        .bind(payload<{ task_id: string }>(frame).task_id)
+        .first<{ workspace_id: string }>();
+      expect(row?.workspace_id).toBe("ws-002");
+    });
+
+    it('workspace "" → schema ปล่อยผ่าน (z.string() รับค่าว่าง) ด่านปฏิเสธด้วยข้อความของตัวเอง', async () => {
+      const before = await countTasks();
+      const frame = await callTool("create_task", { ...inWs002, workspace: "" }, asOrchestrator);
+      expect(refusal(frame)).toMatch(GUARD);
+      expect(await countTasks()).toBe(before);
+    });
+
+    it("workspace null → schema ปฏิเสธก่อนถึงด่าน ไม่เพิ่มแถว", async () => {
+      // `Workspace` คือ `z.string().optional()` — null ไม่ใช่ string จึงถูก SDK ปฏิเสธตอน
+      // parse ก่อน `argumentRefusal` ทำงาน · ข้อความจึง **ไม่ใช่** ของด่าน และกรณีนี้ไม่ได้
+      // พิสูจน์ด่าน — เก็บไว้เพื่อยืนยันว่า null ไม่ตกไปเป็นค่าตั้งต้น ws-001 เงียบ ๆ
+      const before = await countTasks();
+      const frame = await callTool("create_task", { ...inWs002, workspace: null }, asOrchestrator);
+      expect(refusal(frame)).not.toBe("");
+      expect(refusal(frame)).not.toMatch(GUARD);
+      expect(await countTasks()).toBe(before);
+    });
+  });
 });
 
 describe("live — update_task", () => {

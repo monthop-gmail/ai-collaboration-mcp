@@ -370,6 +370,7 @@ export async function argumentRefusal(
 
   const rule = ARGUMENT_RULES[toolName];
   // tool อ่านไม่มีกฎ argument · tool เขียนที่ไม่มีแถวในตารางต้องไม่หลุด — ปฏิเสธ
+  // วันนี้ถึงไม่ได้ (tool เขียนทุกตัวในนโยบายมีแถวใน ARGUMENT_RULES แล้ว) — เก็บไว้เป็น defence in depth
   if (!rule) {
     return toolName.startsWith("get_")
       ? undefined
