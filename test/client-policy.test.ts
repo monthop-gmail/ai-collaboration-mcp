@@ -24,7 +24,12 @@ import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { resetDatabase } from "./apply-schema";
-import { CLIENT_POLICIES, allowedToolsFor, resolvePolicy } from "../src/client-policy";
+import {
+  CLIENT_POLICIES,
+  allowedToolsFor,
+  effectiveAllowlist,
+  resolvePolicy,
+} from "../src/client-policy";
 
 const TOKEN = "client-policy-token-aaaaaaaaaaaaaaaaaa";
 
@@ -51,6 +56,7 @@ function testEnv() {
 async function rpc(
   body: Record<string, unknown>,
   props?: Record<string, unknown>,
+  sharedEnv?: Parameters<typeof worker.fetch>[1],
 ): Promise<Frame> {
   const ctx = createExecutionContext();
   if (props) (ctx as ExecutionContext & { props?: unknown }).props = props;
@@ -66,7 +72,7 @@ async function rpc(
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: (id += 1), ...body }),
     }),
-    testEnv(),
+    sharedEnv ?? testEnv(),
     ctx,
   );
   await waitOnExecutionContext(ctx);
@@ -89,7 +95,19 @@ async function callTool(
   return rpc({ method: "tools/call", params: { name, arguments: args } }, props);
 }
 
-async function listToolNames(props?: Record<string, unknown>): Promise<string[]> {
+async function callToolOn(
+  name: string,
+  args: Record<string, unknown>,
+  props: Record<string, unknown>,
+  sharedEnv: Parameters<typeof worker.fetch>[1],
+): Promise<Frame> {
+  return rpc({ method: "tools/call", params: { name, arguments: args } }, props, sharedEnv);
+}
+
+async function listToolNames(
+  props?: Record<string, unknown>,
+  sharedEnv?: Parameters<typeof worker.fetch>[1],
+): Promise<string[]> {
   const ctx = createExecutionContext();
   if (props) (ctx as ExecutionContext & { props?: unknown }).props = props;
 
@@ -103,7 +121,7 @@ async function listToolNames(props?: Record<string, unknown>): Promise<string[]>
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: (id += 1), method: "tools/list" }),
     }),
-    testEnv(),
+    sharedEnv ?? testEnv(),
     ctx,
   );
   await waitOnExecutionContext(ctx);
@@ -292,5 +310,105 @@ describe("ทางบวก — ของที่ต้องยังทำ�
     const names = await listToolNames();
     expect(names).toContain("create_task");
     expect(names).toContain("post_message");
+  });
+});
+
+/**
+ * F1 ของ `dis-683004a2#49` — **ด่านที่ไม่ได้อยู่ตรงที่มันพัง**
+ *
+ * mentor ยิงมิวแทนต์ K1 คือถอด `|${policyKey(policy)}|` ออกจาก cache key แล้ว
+ * **ชุดเทสต์ 535 ข้อผ่านหมด** · เหตุเพราะ `testEnv()` คืน `{...env}` ใบใหม่ทุกคำขอ
+ * และ `handlers` เป็น `WeakMap` ที่คีย์ด้วย `env` ⇒ ทุกคำขอในเทสต์ได้ cache ว่าง
+ * cache จึงไม่เคยข้ามคำขอ · แต่บน production `env` คงที่ต่อ isolate
+ *
+ * ความพังจริงที่มิวแทนต์นั้นเปิดไว้: Orchestrator เรียกก่อน → handler 6 tool ถูก
+ * cache ไว้ใต้คีย์ `rw||` → **ทุก OAuth client ที่ไม่ถูกจำกัด (`* Bot` ห้าตัว ·
+ * ChatGPT · Grok · Cursor) ได้ handler 6 tool ต่อ** คือโต๊ะเสีย tool ทั้งโต๊ะ
+ * ซึ่งเป็นความเสียหายที่กรณีบวกข้อสุดท้ายมีไว้กันพอดี แต่กันไม่ได้เพราะทดสอบบน
+ * cache ที่ว่างทุกครั้ง
+ *
+ * ไฟล์นี้จึงใช้ **env ใบเดียว** ข้ามคำขอ และยิงสลับลำดับทั้งสองทาง
+ */
+describe("F1 — นโยบายต้องไม่รั่วข้ามผู้เรียกที่ใช้ env เดียวกัน", () => {
+  const unrestricted = { clientId: "client-ไม่ถูกจำกัด", clientName: "ChatGPT" };
+  const deniedName = { clientId: "id-ใหม่หลังลงทะเบียนรอบใหม่", clientName: ORCH.client_name };
+  const sorted = [...ORCH.tools].sort();
+
+  /** env ใบเดียวกันทุกคำขอ — เลียนของจริงที่ `env` คงที่ต่อ isolate */
+  function sharedEnv() {
+    return {
+      ...env,
+      MCP_AUTH_TOKEN: TOKEN,
+      ALLOWED_ORIGIN_HOSTNAMES: "*",
+    } as unknown as Parameters<typeof worker.fetch>[1];
+  }
+
+  it("ผู้ถูกจำกัดเรียกก่อน แล้วผู้ไม่ถูกจำกัดต้องยังได้ tool ครบ", async () => {
+    const one = sharedEnv();
+
+    expect(await listToolNames(asOrchestrator, one)).toEqual(sorted);
+
+    const full = await listToolNames(unrestricted, one);
+    expect(full.length).toBeGreaterThan(ORCH.tools.length);
+    expect(full).toContain("create_task");
+    expect(full).toContain("resolve_decision");
+
+    expect(await listToolNames(deniedName, one)).toEqual([]);
+
+    // กลับมาถามคนแรกซ้ำ ต้องได้ของเดิม ไม่ใช่ของที่คนหลังทำให้เปลี่ยน
+    expect(await listToolNames(asOrchestrator, one)).toEqual(sorted);
+  });
+
+  it("ลำดับกลับทาง — ผู้ไม่ถูกจำกัดเรียกก่อน ก็ต้องได้ผลเดิมทั้งสองฝ่าย", async () => {
+    const one = sharedEnv();
+
+    const full = await listToolNames(unrestricted, one);
+    expect(full).toContain("create_task");
+
+    expect(await listToolNames(asOrchestrator, one)).toEqual(sorted);
+    expect(await listToolNames(deniedName, one)).toEqual([]);
+    expect(await listToolNames(unrestricted, one)).toEqual(full);
+  });
+
+  it("เรียก tool จริงบน env เดียวกัน ก็ยังแยกสิทธิ์ถูก", async () => {
+    const one = sharedEnv();
+
+    // ผู้ถูกจำกัดโดนปฏิเสธ แล้วผู้ไม่ถูกจำกัดต้องยังสร้างงานได้
+    expect(refusal(await callToolOn("create_task", { title: "x", detail: "" }, asOrchestrator, one)))
+      .toMatch(/disabled|ไม่อยู่ในนโยบาย/);
+
+    const made = await callToolOn(
+      "create_task",
+      { title: "คนที่ไม่ถูกจำกัดยังสร้างได้", detail: "" },
+      unrestricted,
+      one,
+    );
+    expect(made.result?.isError ?? false).toBe(false);
+  });
+});
+
+/** F2 ของ `#49` — ส่วนร่วมของ allowlist เมื่ออยู่บนเส้นที่มีรายการของตัวเอง */
+describe("F2 — ส่วนร่วมของ allowlist", () => {
+  const decision = resolvePolicy(ORCH.client_id, ORCH.client_name);
+
+  it("ไม่ได้อยู่บนเส้นที่มีรายการ = ใช้ของนโยบายตรง ๆ", () => {
+    expect(effectiveAllowlist(decision)).toEqual(ORCH.tools);
+  });
+
+  it("อยู่บนเส้นที่มีรายการ = ตัดเหลือเฉพาะที่อยู่ทั้งสองรายการ", () => {
+    const readOnly = ["get_tasks", "get_discussion", "get_plans"];
+    // `post_message` กับ tool อ่านที่ไม่อยู่ในรายการของเส้นนั้น ต้องหลุดออกทั้งคู่
+    expect(effectiveAllowlist(decision, readOnly)).toEqual(["get_tasks", "get_discussion"]);
+    expect(effectiveAllowlist(decision, readOnly)).not.toContain("post_message");
+  });
+
+  it("unrestricted ยังเป็น undefined แม้อยู่บนเส้นที่มีรายการ — ปล่อยให้เส้นนั้นกรองเอง", () => {
+    expect(effectiveAllowlist({ kind: "unrestricted" }, ["get_tasks"])).toBeUndefined();
+  });
+
+  it("denied เป็นรายการว่างเสมอ ไม่ว่าเส้นไหน", () => {
+    const denied = resolvePolicy("id-อื่น", ORCH.client_name);
+    expect(effectiveAllowlist(denied)).toEqual([]);
+    expect(effectiveAllowlist(denied, ["get_tasks"])).toEqual([]);
   });
 });

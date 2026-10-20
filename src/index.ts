@@ -7,7 +7,7 @@ import { json, secretsMatch } from "./http";
 import { handleView } from "./view";
 import { nameForToken, staticIdentityFor, type StaticIdentity } from "./identity";
 import { READ_ONLY_TOOLS, withReadOnlyGuard } from "./readonly";
-import { allowedToolsFor, resolvePolicy, type PolicyDecision } from "./client-policy";
+import { effectiveAllowlist, resolvePolicy, type PolicyDecision } from "./client-policy";
 import {
   createAdapter,
   jwksSourceMismatch,
@@ -78,11 +78,9 @@ function policyKey(policy: PolicyDecision): string {
  * ในวันที่มีคนต่อสองเส้นนี้เข้าหากัน
  */
 function guardFor(server: McpServer, readOnly: boolean, policy: PolicyDecision): McpServer {
-  const allow = allowedToolsFor(policy);
+  const allow = effectiveAllowlist(policy, readOnly ? READ_ONLY_TOOLS : undefined);
   if (!allow) return readOnly ? withReadOnlyGuard(server) : server;
-
-  const effective = readOnly ? allow.filter((name) => READ_ONLY_TOOLS.includes(name)) : allow;
-  return withReadOnlyGuard(server, effective);
+  return withReadOnlyGuard(server, allow);
 }
 
 function getHandler(

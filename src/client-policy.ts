@@ -154,6 +154,28 @@ export function allowedToolsFor(decision: PolicyDecision): readonly string[] | u
 }
 
 /**
+ * allowlist ที่มีผลจริง เมื่อผู้เรียกอยู่บนเส้นที่มีรายการของตัวเองด้วย
+ *
+ * ใช้ **ส่วนร่วม** ของสองรายการ ไม่ใช่ของนโยบายอย่างเดียว — ถ้าเอาของนโยบายทับ
+ * ไปเลย client ที่ถูกจำกัดและเข้าทางเส้น read-only จะได้ tool เขียนคืนมา ซึ่งเป็น
+ * การเปิดสิทธิ์โดยไม่มีใครสั่ง
+ *
+ * วันนี้กรณีนี้เกิดไม่ได้ เพราะนโยบายผูกกับ OAuth และเส้น read-only ไม่ผูกกับ OAuth
+ * provider · แยกเป็นฟังก์ชันบริสุทธิ์เพื่อให้ **ทดสอบได้ตรง ๆ** ตามที่ mentor ขอไว้ที่
+ * `dis-683004a2#49` ข้อ F2 — ของที่ทดสอบไม่ได้คือของที่ไม่มีใครรู้ว่าพังเมื่อไหร่
+ *
+ * @param readOnlyTools รายการของเส้นที่ผู้เรียกอยู่ · `undefined` = ไม่ได้อยู่บนเส้นนั้น
+ */
+export function effectiveAllowlist(
+  decision: PolicyDecision,
+  readOnlyTools?: readonly string[],
+): readonly string[] | undefined {
+  const allow = allowedToolsFor(decision);
+  if (!allow || !readOnlyTools) return allow;
+  return allow.filter((name) => readOnlyTools.includes(name));
+}
+
+/**
  * ด่านระดับ argument — เรียกจาก `registerTool()` จุดเดียว ก่อน handler ทำงาน
  *
  * คืนข้อความเมื่อ **ห้าม** และคืน `undefined` เมื่อผ่าน · ให้ผู้เรียกโยน error เอง
