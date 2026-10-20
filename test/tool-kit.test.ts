@@ -45,6 +45,7 @@ describe("ประกาศเลข contract ให้ทุก tool", () => {
 
     registerTool(
       server,
+      { DB: undefined as never },
       "some_tool",
       { description: "ทำอะไรสักอย่าง", inputSchema: z.object({}) },
       async () => ({}),
@@ -58,6 +59,7 @@ describe("ประกาศเลข contract ให้ทุก tool", () => {
 
     registerTool(
       server,
+      { DB: undefined as never },
       "some_tool",
       { description: "ทำอะไรสักอย่าง", inputSchema: z.object({}) },
       async () => ({}),

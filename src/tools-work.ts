@@ -129,6 +129,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "record_decision",
     {
       description:
@@ -173,6 +174,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "get_decisions",
     {
       description:
@@ -202,6 +204,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "set_decision_scope",
     {
       description:
@@ -254,6 +257,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "resolve_decision",
     {
       description:
@@ -322,6 +326,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "record_plan",
     {
       description:
@@ -368,6 +373,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "get_plans",
     {
       description:
@@ -400,6 +406,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "create_task",
     {
       description:
@@ -455,6 +462,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "update_task",
     {
       description:
@@ -536,6 +544,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "get_tasks",
     {
       description:
@@ -566,6 +575,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "create_handoff",
     {
       description:
@@ -635,6 +645,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "get_handoffs",
     {
       description:
@@ -716,6 +727,7 @@ export function registerWorkTools(server: McpServer, env: Env, staticIdentity?: 
 
   registerTool(
     server,
+    env,
     "accept_handoff",
     {
       description:

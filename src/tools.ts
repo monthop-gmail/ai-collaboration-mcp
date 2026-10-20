@@ -51,6 +51,7 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
 
   registerTool(
     server,
+    env,
     "create_discussion",
     {
       description:
@@ -93,6 +94,7 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
 
   registerTool(
     server,
+    env,
     "post_message",
     {
       description:
@@ -132,6 +134,7 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
 
   registerTool(
     server,
+    env,
     "get_discussion",
     {
       description:
@@ -183,6 +186,7 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
 
   registerTool(
     server,
+    env,
     "get_participants",
     {
       description:
@@ -224,6 +228,7 @@ export function registerTools(server: McpServer, env: Env, staticIdentity?: Stat
 
   registerTool(
     server,
+    env,
     "get_workspace_context",
     {
       description:

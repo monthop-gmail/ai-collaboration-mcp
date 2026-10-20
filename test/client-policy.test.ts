@@ -26,16 +26,20 @@ import worker from "../src/index";
 import { resetDatabase } from "./apply-schema";
 import {
   CLIENT_POLICIES,
+  OWNERSHIP_SQL,
   allowedToolsFor,
+  argumentRefusal,
   effectiveAllowlist,
   resolvePolicy,
+  type ClientPolicy,
 } from "../src/client-policy";
 
 const TOKEN = "client-policy-token-aaaaaaaaaaaaaaaaaa";
 
 /** นโยบายที่ส่งขึ้นจริง — เทสต์ยิงกับของที่ deploy ไม่ใช่ของที่ฉีดเข้าไปเอง */
 const ORCH = CLIENT_POLICIES.find((entry) => entry.client_name === "Orchestrator Bot")!;
-const ALLOWED_THREAD = ORCH.post_message_discussions[0]!;
+const ALLOWED_THREAD = ORCH.discussions[0]!;
+const WORKER = ORCH.workers[0]!;
 
 let id = 0;
 
@@ -144,12 +148,43 @@ const asOrchestrator = { clientId: ORCH.client_id, clientName: ORCH.client_name 
  * ใส่เป็น fixture ตรง ๆ เพื่อให้กรณีบวกยิงกับ **id ที่ส่งขึ้นจริง** ไม่ใช่ id สมมุติ
  */
 async function seedAllowedThread(): Promise<void> {
-  await (env as unknown as { DB: D1Database }).DB.prepare(
-    `INSERT INTO discussions (id, workspace_id, title, created_by, created_at)
-     VALUES (?1, 'ws-001', 'กระทู้ notify ของ shadow (fixture)', 'operator', ?2)`,
+  for (const id of ORCH.discussions) {
+    await DB.prepare(
+      `INSERT INTO discussions (id, workspace_id, title, created_by, created_at)
+       VALUES (?1, 'ws-001', 'กระทู้ใน allowlist (fixture)', 'operator', ?2)`,
+    )
+      .bind(id, new Date().toISOString())
+      .run();
+  }
+}
+
+const DB = (env as unknown as { DB: D1Database }).DB;
+
+/** task ที่ใส่ตรง ๆ ลง D1 — ใช้สร้างกรณีที่ผ่าน tool ไม่ได้ เช่น กระทู้ที่ถูกถอดจาก allowlist */
+async function seedTask(createdByClient: string, discussionId: string | null): Promise<string> {
+  const id = `task-${crypto.randomUUID()}`;
+  await DB.prepare(
+    `INSERT INTO tasks (id, workspace_id, discussion_id, title, detail, status, created_by,
+       created_by_client, created_at) VALUES (?1, 'ws-001', ?2, 'fixture', '', 'open', 'x', ?3, ?4)`,
   )
-    .bind(ALLOWED_THREAD, new Date().toISOString())
+    .bind(id, discussionId, createdByClient, new Date().toISOString())
     .run();
+  return id;
+}
+
+function payload<T>(frame: Frame): T {
+  return JSON.parse(frame.result?.content?.[0]?.text ?? "{}") as T;
+}
+
+/** create_task ที่ถูกต้องทุกข้อของ Orchestrator — กรณีบวกที่ทุกกรณีลบเทียบกับมัน */
+async function orchestratorTask(): Promise<string> {
+  const frame = await callTool(
+    "create_task",
+    { title: "งานของ orchestrator", detail: "", discussion_id: ALLOWED_THREAD, assigned_to: WORKER },
+    asOrchestrator,
+  );
+  expect(frame.result?.isError ?? false).toBe(false);
+  return payload<{ task_id: string }>(frame).task_id;
 }
 
 beforeEach(async () => {
@@ -158,19 +193,26 @@ beforeEach(async () => {
 });
 
 describe("หานโยบาย — สามค่า ไม่ใช่สอง", () => {
-  const policies = [
+  const policies: readonly ClientPolicy[] = [
     {
       client_id: "id-ok",
+      also_ids: ["id-ok-2"],
       client_name: "Bot ที่ถูกจำกัด",
       tools: ["get_tasks"],
-      post_message_discussions: [],
+      discussions: [],
+      workers: [],
+      workspace: "ws-001",
     },
-  ] as const;
+  ];
 
   it("id ตรง = ใช้นโยบายนั้น", () => {
     const decision = resolvePolicy("id-ok", "Bot ที่ถูกจำกัด", policies);
     expect(decision.kind).toBe("restricted");
     expect(allowedToolsFor(decision)).toEqual(["get_tasks"]);
+  });
+
+  it("id ใน also_ids = นโยบายเดียวกัน", () => {
+    expect(resolvePolicy("id-ok-2", "ชื่ออะไรก็ได้", policies).kind).toBe("restricted");
   });
 
   it("ไม่อยู่ในรายการเลย = unrestricted และ allowlist เป็น undefined ไม่ใช่ว่าง", () => {
@@ -198,12 +240,13 @@ describe("ทางลบ — tool ที่ไม่อยู่ในนโย
   it("ไม่โผล่ใน tools/list ของ client ที่ถูกจำกัด", async () => {
     const names = await listToolNames(asOrchestrator);
     expect(names).toEqual([...ORCH.tools].sort());
-    expect(names).not.toContain("create_task");
+    expect(names).toContain("create_task");
+    expect(names).not.toContain("accept_handoff");
     expect(names).not.toContain("resolve_decision");
   });
 
   it("เรียกตรงแล้วได้คำปฏิเสธจาก server ไม่ใช่ unknown tool", async () => {
-    const frame = await callTool("create_task", { title: "ไม่ควรได้", detail: "" }, asOrchestrator);
+    const frame = await callTool("resolve_decision", { decision_id: "x", status: "approved" }, asOrchestrator);
     const text = refusal(frame);
 
     // ข้อความต้องสื่อว่า **ถูกปิด** ไม่ใช่ว่าไม่มี tool นี้อยู่จริง
@@ -212,11 +255,8 @@ describe("ทางลบ — tool ที่ไม่อยู่ในนโย
   });
 });
 
-describe("ทางลบ — การเขียนที่ไม่เกี่ยวกับ post_message ถูกปฏิเสธทั้งหมด", () => {
+describe("ทางลบ — การเขียนนอกสี่ตัวที่ dec-020d7bb3 เปิด ถูกปฏิเสธทั้งหมด", () => {
   for (const tool of [
-    "create_task",
-    "update_task",
-    "create_handoff",
     "accept_handoff",
     "record_decision",
     "resolve_decision",
@@ -374,7 +414,7 @@ describe("F1 — นโยบายต้องไม่รั่วข้าม
     const one = sharedEnv();
 
     // ผู้ถูกจำกัดโดนปฏิเสธ แล้วผู้ไม่ถูกจำกัดต้องยังสร้างงานได้
-    expect(refusal(await callToolOn("create_task", { title: "x", detail: "" }, asOrchestrator, one)))
+    expect(refusal(await callToolOn("resolve_decision", { decision_id: "x", status: "approved" }, asOrchestrator, one)))
       .toMatch(/disabled|ไม่อยู่ในนโยบาย/);
 
     const made = await callToolOn(
@@ -410,5 +450,322 @@ describe("F2 — ส่วนร่วมของ allowlist", () => {
     const denied = resolvePolicy("id-อื่น", ORCH.client_name);
     expect(effectiveAllowlist(denied)).toEqual([]);
     expect(effectiveAllowlist(denied, ["get_tasks"])).toEqual([]);
+  });
+});
+
+/**
+ * `dec-020d7bb3` — โหมด live: เขียนได้เฉพาะของตัวเอง ในกระทู้ที่อนุญาต ส่งให้ worker ที่ระบุ
+ *
+ * ทุกกฎมีทั้งกรณีบวกและกรณีลบ · กรณีบวก `orchestratorTask()` คือฐานที่กรณีลบทุกข้อ
+ * เทียบกับ — ถ้าด่านปฏิเสธทุกอย่าง กรณีบวกจะล้มก่อน
+ */
+describe("live — create_task", () => {
+  it("ครบทุกข้อ (กระทู้ใน allowlist · worker ในรายการ · ไม่ระบุ workspace) สร้างได้", async () => {
+    const id = await orchestratorTask();
+    const row = await DB.prepare("SELECT created_by_client, assigned_to FROM tasks WHERE id = ?1")
+      .bind(id)
+      .first<{ created_by_client: string; assigned_to: string }>();
+    expect(row?.created_by_client).toBe(ORCH.client_id);
+    expect(row?.assigned_to).toBe(WORKER);
+  });
+
+  it('ระบุ workspace "ws-001" ตรงตัวก็ได้', async () => {
+    const frame = await callTool(
+      "create_task",
+      { title: "x", detail: "", discussion_id: ALLOWED_THREAD, assigned_to: WORKER, workspace: "ws-001" },
+      asOrchestrator,
+    );
+    expect(frame.result?.isError ?? false).toBe(false);
+  });
+
+  it("ไม่ส่ง discussion_id → ปฏิเสธ", async () => {
+    const frame = await callTool("create_task", { title: "x", detail: "", assigned_to: WORKER }, asOrchestrator);
+    expect(refusal(frame)).toMatch(/ต้องส่ง discussion_id/);
+  });
+
+  it("กระทู้นอก allowlist → ปฏิเสธ", async () => {
+    const other = payload<{ discussion_id: string }>(
+      await callTool("create_discussion", { title: "กระทู้อื่น" }),
+    ).discussion_id;
+    const frame = await callTool(
+      "create_task",
+      { title: "x", detail: "", discussion_id: other, assigned_to: WORKER },
+      asOrchestrator,
+    );
+    expect(refusal(frame)).toMatch(/ถูกจำกัดไว้เฉพาะกระทู้/);
+  });
+
+  it("ไม่ส่ง assigned_to หรือส่ง worker นอกรายการ → ปฏิเสธ", async () => {
+    const missing = await callTool("create_task", { title: "x", detail: "", discussion_id: ALLOWED_THREAD }, asOrchestrator);
+    expect(refusal(missing)).toMatch(/worker ในรายการ/);
+    const stranger = await callTool(
+      "create_task",
+      { title: "x", detail: "", discussion_id: ALLOWED_THREAD, assigned_to: "ChatGPT" },
+      asOrchestrator,
+    );
+    expect(refusal(stranger)).toMatch(/worker ในรายการ/);
+  });
+
+  /**
+   * F1 (dis-f6cead2d#2) — ด่าน workspace ต้องถูกพิสูจน์ด้วยตัวมันเอง
+   *
+   * ก่อนหน้านี้กรณี ws-002 ผ่านแม้ด่านถูกถอดเป็น `if (false)` เพราะ ws-002 ไม่มีอยู่ใน D1
+   * และ handler ปฏิเสธเองอยู่แล้ว · ตอนนี้ใส่ ws-002 เป็น fixture ให้ handler **รับได้** แล้ว
+   * จับข้อความของด่านตรงตัว พร้อมกลุ่มควบคุมที่ client ไม่ถูกจำกัดสร้างได้ด้วย argument
+   * เดียวกัน — ถ้าด่านหาย กรณีลบจะล้มและกรณีบวกจะยังผ่าน
+   */
+  describe("workspace — ด่านของ client ไม่ใช่ของ handler", () => {
+    const GUARD = /เขียนได้เฉพาะ workspace/;
+    const unrestricted = { clientId: "client-ไม่ถูกจำกัด", clientName: "ChatGPT" };
+    const inWs002 = { title: "x", detail: "", discussion_id: ALLOWED_THREAD, assigned_to: WORKER, workspace: "ws-002" };
+
+    async function countTasks(): Promise<number> {
+      return (await DB.prepare("SELECT count(*) AS n FROM tasks").first<{ n: number }>())!.n;
+    }
+
+    beforeEach(async () => {
+      await DB.prepare(
+        "INSERT INTO workspaces (id, name, created_at) VALUES ('ws-002', 'อีก workspace (fixture)', ?1)",
+      )
+        .bind(new Date().toISOString())
+        .run();
+    });
+
+    it('workspace "ws-002" ที่มีอยู่จริง → ด่านปฏิเสธด้วยข้อความของตัวเอง ไม่เพิ่มแถว', async () => {
+      const before = await countTasks();
+      const frame = await callTool("create_task", inWs002, asOrchestrator);
+      expect(refusal(frame)).toMatch(GUARD);
+      expect(await countTasks()).toBe(before);
+    });
+
+    it("กลุ่มควบคุม — client ที่ไม่ถูกจำกัดสร้างใน ws-002 ด้วย argument เดียวกันได้ (เพิ่มหนึ่งแถว)", async () => {
+      const before = await countTasks();
+      const frame = await callTool("create_task", inWs002, unrestricted);
+      expect(frame.result?.isError ?? false).toBe(false);
+      expect(await countTasks()).toBe(before + 1);
+      const row = await DB.prepare("SELECT workspace_id FROM tasks WHERE id = ?1")
+        .bind(payload<{ task_id: string }>(frame).task_id)
+        .first<{ workspace_id: string }>();
+      expect(row?.workspace_id).toBe("ws-002");
+    });
+
+    it('workspace "" → schema ปล่อยผ่าน (z.string() รับค่าว่าง) ด่านปฏิเสธด้วยข้อความของตัวเอง', async () => {
+      const before = await countTasks();
+      const frame = await callTool("create_task", { ...inWs002, workspace: "" }, asOrchestrator);
+      expect(refusal(frame)).toMatch(GUARD);
+      expect(await countTasks()).toBe(before);
+    });
+
+    it("workspace null → schema ปฏิเสธก่อนถึงด่าน ไม่เพิ่มแถว", async () => {
+      // `Workspace` คือ `z.string().optional()` — null ไม่ใช่ string จึงถูก SDK ปฏิเสธตอน
+      // parse ก่อน `argumentRefusal` ทำงาน · ข้อความจึง **ไม่ใช่** ของด่าน และกรณีนี้ไม่ได้
+      // พิสูจน์ด่าน — เก็บไว้เพื่อยืนยันว่า null ไม่ตกไปเป็นค่าตั้งต้น ws-001 เงียบ ๆ
+      const before = await countTasks();
+      const frame = await callTool("create_task", { ...inWs002, workspace: null }, asOrchestrator);
+      expect(refusal(frame)).not.toBe("");
+      expect(refusal(frame)).not.toMatch(GUARD);
+      expect(await countTasks()).toBe(before);
+    });
+  });
+});
+
+describe("live — update_task", () => {
+  it("ปิดงานของตัวเองเป็น done พร้อม result_ref ได้", async () => {
+    const id = await orchestratorTask();
+    const frame = await callTool(
+      "update_task",
+      { task_id: id, status: "done", result_ref: "dis-x#1", detail: "เสร็จ", acting_context: "ws-001" },
+      asOrchestrator,
+    );
+    expect(frame.result?.isError ?? false).toBe(false);
+    expect(payload<{ status: string }>(frame).status).toBe("done");
+  });
+
+  it("blocked ก็ได้ · open กับ in_progress ไม่ได้", async () => {
+    const id = await orchestratorTask();
+    expect((await callTool("update_task", { task_id: id, status: "blocked" }, asOrchestrator)).result?.isError ?? false).toBe(false);
+    expect(refusal(await callTool("update_task", { task_id: id, status: "open" }, asOrchestrator))).toMatch(/status ได้เฉพาะ done, blocked/);
+    expect(refusal(await callTool("update_task", { task_id: id, status: "in_progress" }, asOrchestrator))).toMatch(/status ได้เฉพาะ/);
+  });
+
+  it("assigned_to ห้ามทุกค่า รวม null", async () => {
+    const id = await orchestratorTask();
+    for (const assigned_to of ["Claude Code Bot", null]) {
+      const frame = await callTool("update_task", { task_id: id, status: "done", assigned_to }, asOrchestrator);
+      expect(refusal(frame)).toMatch(/assigned_to/);
+    }
+    const row = await DB.prepare("SELECT status FROM tasks WHERE id = ?1").bind(id).first<{ status: string }>();
+    expect(row?.status).toBe("open");
+  });
+
+  it("task ของ client อื่น → ปฏิเสธ ด้วยข้อความเดียวกับ task ที่ไม่มีอยู่", async () => {
+    const foreign = payload<{ task_id: string }>(
+      await callTool(
+        "create_task",
+        { title: "ของ ChatGPT", detail: "", discussion_id: ALLOWED_THREAD },
+        { clientId: "client-อื่น", clientName: "ChatGPT" },
+      ),
+    ).task_id;
+
+    const onForeign = refusal(await callTool("update_task", { task_id: foreign, status: "done" }, asOrchestrator));
+    const onMissing = refusal(await callTool("update_task", { task_id: "task-ไม่มีอยู่", status: "done" }, asOrchestrator));
+
+    expect(onForeign).toMatch(/ไม่พบ หรือไม่ได้สร้างโดย client นี้/);
+    expect(onForeign.replace(foreign, "<id>")).toBe(onMissing.replace("task-ไม่มีอยู่", "<id>"));
+
+    const row = await DB.prepare("SELECT status FROM tasks WHERE id = ?1").bind(foreign).first<{ status: string }>();
+    expect(row?.status).toBe("open");
+  });
+
+  it("task ของตัวเองแต่กระทู้ถูกถอดจาก allowlist แล้ว → ปฏิเสธ", async () => {
+    const removed = payload<{ discussion_id: string }>(
+      await callTool("create_discussion", { title: "กระทู้ที่เคยอยู่ใน allowlist" }),
+    ).discussion_id;
+    const id = await seedTask(ORCH.client_id, removed);
+    expect(refusal(await callTool("update_task", { task_id: id, status: "done" }, asOrchestrator))).toMatch(
+      /ไม่อยู่ใน allowlist ปัจจุบัน/,
+    );
+    // ไม่มีกระทู้เลยก็ไม่อยู่ใน allowlist
+    const orphan = await seedTask(ORCH.client_id, null);
+    expect(refusal(await callTool("update_task", { task_id: orphan, status: "done" }, asOrchestrator))).toMatch(
+      /ไม่อยู่ใน allowlist ปัจจุบัน/,
+    );
+  });
+
+  it("D1 ตอบผิดพลาดตอนอ่านเจ้าของ → ปฏิเสธ (fail-closed) ไม่ใช่ปล่อยหรือพังเฉย ๆ", async () => {
+    const broken = {
+      ...testEnv(),
+      DB: {
+        prepare() {
+          throw new Error("D1_ERROR: simulated outage");
+        },
+      },
+    } as unknown as Parameters<typeof worker.fetch>[1];
+    const frame = await callToolOn("update_task", { task_id: "task-x", status: "done" }, asOrchestrator, broken);
+    expect(refusal(frame)).toMatch(/fail-closed/);
+  });
+});
+
+describe("live — create_handoff", () => {
+  it("ส่งงานของตัวเองให้ worker ในรายการได้", async () => {
+    const id = await orchestratorTask();
+    const frame = await callTool("create_handoff", { task_id: id, to: WORKER, context: "ทำต่อ" }, asOrchestrator);
+    expect(frame.result?.isError ?? false).toBe(false);
+    expect(payload<{ to: string }>(frame).to).toBe(WORKER);
+  });
+
+  it("to นอกรายการ worker → ปฏิเสธ", async () => {
+    const id = await orchestratorTask();
+    expect(refusal(await callTool("create_handoff", { task_id: id, to: "Grok", context: "x" }, asOrchestrator))).toMatch(
+      /worker ในรายการ/,
+    );
+  });
+
+  it("task ของ client อื่น → ปฏิเสธ ข้อความเดียวกับ task ที่ไม่มี", async () => {
+    const foreign = await seedTask("client-อื่น", ALLOWED_THREAD);
+    const onForeign = refusal(await callTool("create_handoff", { task_id: foreign, to: WORKER, context: "x" }, asOrchestrator));
+    const onMissing = refusal(await callTool("create_handoff", { task_id: "task-ไม่มี", to: WORKER, context: "x" }, asOrchestrator));
+    expect(onForeign.replace(foreign, "<id>")).toBe(onMissing.replace("task-ไม่มี", "<id>"));
+    expect((await DB.prepare("SELECT count(*) AS n FROM handoffs").first<{ n: number }>())!.n).toBe(0);
+  });
+
+  it("กระทู้ถูกถอดจาก allowlist → ปฏิเสธ", async () => {
+    const id = await seedTask(ORCH.client_id, null);
+    expect(refusal(await callTool("create_handoff", { task_id: id, to: WORKER, context: "x" }, asOrchestrator))).toMatch(
+      /ไม่อยู่ใน allowlist ปัจจุบัน/,
+    );
+  });
+});
+
+/**
+ * also_ids ของแถวจริงว่าง (ข้อ 1) จึงยิงผ่าน `worker.fetch` ด้วยนโยบายที่ deploy ไม่ได้ —
+ * ทดสอบด่านตัวจริง (`argumentRefusal`) กับ D1 จริง ด้วยแถวที่มี also_ids แทน ·
+ * `resolvePolicy` กับการตรวจเจ้าของใช้ `policyIds()` ตัวเดียวกัน จึงเป็นเซตเดียวกันโดยโครงสร้าง
+ */
+describe("live — also_ids", () => {
+  const twoIds: ClientPolicy = { ...ORCH, also_ids: ["id-ใบใหม่"] };
+
+  it("id ใน also_ids แก้ task ที่สร้างด้วย client_id ได้ และกลับกัน", async () => {
+    const byPrimary = await seedTask(ORCH.client_id, ALLOWED_THREAD);
+    const bySecondary = await seedTask("id-ใบใหม่", ALLOWED_THREAD);
+    const decision = resolvePolicy("id-ใบใหม่", ORCH.client_name, [twoIds]);
+    expect(decision.kind).toBe("restricted");
+    expect(await argumentRefusal(decision, "update_task", { task_id: byPrimary, status: "done" }, DB)).toBeUndefined();
+    expect(await argumentRefusal(decision, "update_task", { task_id: bySecondary, status: "done" }, DB)).toBeUndefined();
+  });
+
+  it("id นอกเซต ยังถูกปฏิเสธ", async () => {
+    const byPrimary = await seedTask(ORCH.client_id, ALLOWED_THREAD);
+    const stranger: ClientPolicy = { ...ORCH, client_id: "id-คนอื่น", also_ids: [] };
+    const decision = resolvePolicy("id-คนอื่น", "x", [stranger]);
+    expect(await argumentRefusal(decision, "update_task", { task_id: byPrimary, status: "done" }, DB)).toMatch(
+      /ไม่พบ หรือไม่ได้สร้างโดย client นี้/,
+    );
+  });
+});
+
+describe("live — client ที่ไม่ถูกจำกัดไม่เสียอะไร", () => {
+  /** env ที่จด SQL ทุกคำสั่งที่ถูก prepare — เพื่อยืนยันว่า D1 read ของด่านนี้ไม่เกิดกับคนที่ไม่เกี่ยว */
+  function recordingEnv() {
+    const seen: string[] = [];
+    const base = testEnv() as unknown as { DB: D1Database };
+    const spy = new Proxy(base.DB, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            seen.push(sql);
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return { seen, env: { ...base, DB: spy } as unknown as Parameters<typeof worker.fetch>[1] };
+  }
+
+  it("update_task ของ ChatGPT ไม่ยิงคิวรีตรวจเจ้าของ — แต่ของ Orchestrator ยิง", async () => {
+    const unrestricted = { clientId: "client-อื่น", clientName: "ChatGPT" };
+    const one = recordingEnv();
+    const made = payload<{ task_id: string }>(
+      await callToolOn("create_task", { title: "x", detail: "" }, unrestricted, one.env),
+    ).task_id;
+    one.seen.length = 0;
+
+    const frame = await callToolOn(
+      "update_task",
+      { task_id: made, status: "in_progress", assigned_to: "ใครก็ได้" },
+      unrestricted,
+      one.env,
+    );
+    expect(frame.result?.isError ?? false).toBe(false);
+    expect(one.seen).not.toContain(OWNERSHIP_SQL);
+
+    await callToolOn("update_task", { task_id: made, status: "done" }, asOrchestrator, one.env);
+    expect(one.seen).toContain(OWNERSHIP_SQL);
+  });
+
+  it("ชื่อ Orchestrator Bot ทาง X-Client-Name โดยไม่มี props ไม่ถูกดึงเข้านโยบาย — ไม่มี fallback จาก header", async () => {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://example.test/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${TOKEN}`,
+          "x-client-name": ORCH.client_name,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: (id += 1), method: "tools/list" }),
+      }),
+      testEnv(),
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    const text = await response.text();
+    const line = text.split("\n").find((l) => l.startsWith("data:"));
+    const names = (JSON.parse(line ? line.slice(5) : text) as { result?: { tools?: Array<{ name: string }> } })
+      .result?.tools?.map((t) => t.name) ?? [];
+    expect(names).toContain("resolve_decision");
   });
 });
