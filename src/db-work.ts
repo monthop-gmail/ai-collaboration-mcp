@@ -7,6 +7,7 @@
  */
 
 import { RequestError, postMessage, type Author } from "./db";
+import { timingSafeEqualStr } from "./timing-safe";
 // tool-kit ไม่ได้นำเข้า db-work จึงไม่เกิดวงจรการนำเข้า
 import { normalizeActingContext, normalizeCapability } from "./tool-kit";
 
@@ -49,7 +50,18 @@ export interface Decision {
    * ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
    */
   acting_context: string | null;
+  /** วิธีที่ใช้ยืนยันตอนปิดใบ — `null` คือยังไม่ปิด หรือปิดก่อนมีช่องนี้ (ไมเกรชัน 0008) */
+  decided_by_method: DecidedByMethod | null;
+  /** ตัวตนที่ยืนยันแล้วของคนปิด — ยังไม่มีโค้ดเขียน จึงเป็น `null` เสมอ */
+  decided_by_sub: string | null;
 }
+
+/**
+ * วิธีที่ใช้ยืนยันตอนปิด decision — คนละแกนกับ `DecidedByKind`
+ *
+ * server เขียนแค่ `approval_secret` กับ `none` · ค่าอื่นเป็นของงานถัดไป
+ */
+export type DecidedByMethod = "approval_secret" | "none";
 
 /**
  * ระดับของหลักฐานว่าใครเป็นคนปิด decision
@@ -347,6 +359,8 @@ export async function recordDecision(
     scope_set_at: null,
     // `record_decision` ไม่รับ acting_context ในสไลซ์แรก · บริบทถูกประกาศตอน *ปิด* ใบ
     acting_context: null,
+    decided_by_method: null,
+    decided_by_sub: null,
   };
 
   await db
@@ -1557,11 +1571,12 @@ export async function resolveDecision(
         "เซิร์ฟเวอร์ยังไม่ได้ตั้ง APPROVAL_SECRET จึงตรวจรหัสไม่ได้ — ถ้าจะปิดโดยไม่ยืนยัน ให้ไม่ต้องส่ง approval_code",
       );
     }
-    if (approval.code !== approval.secret) {
+    if (!timingSafeEqualStr(approval.code, approval.secret)) {
       throw new RequestError("approval_code ไม่ถูกต้อง — ไม่ได้ปิด decision ให้");
     }
     kind = "human";
   }
+  const method: DecidedByMethod = kind === "human" ? "approval_secret" : "none";
 
   const decidedAt = now();
   await db
@@ -1569,12 +1584,12 @@ export async function resolveDecision(
       `UPDATE decisions
           SET status = ?1, decided_by = ?2, decided_by_client = ?3,
               decided_by_kind = ?4, decided_reason = ?5, decided_at = ?6,
-              superseded_by = ?7, acting_context = ?8
-        WHERE id = ?9`,
+              superseded_by = ?7, acting_context = ?8, decided_by_method = ?9
+        WHERE id = ?10`,
     )
     .bind(
       verdict, author.name, author.client, kind, reason, decidedAt,
-      supersededBy ?? null, normalizeActingContext(actingContext), decisionId,
+      supersededBy ?? null, normalizeActingContext(actingContext), method, decisionId,
     )
     .run();
 
@@ -1611,6 +1626,8 @@ export async function resolveDecision(
       // ต้อง override ด้วย · `...existing` เป็นแถว**ก่อน**อัปเดต ซึ่ง acting_context
       // ยังเป็น null เสมอ · ลืมข้อนี้แล้วค่าที่คืนกลับไม่ตรงกับที่เก็บ และเทสต์จับได้
       acting_context: normalizeActingContext(actingContext),
+      decided_by_method: method,
+      decided_by_sub: null,
     },
     announced,
   };
@@ -1662,7 +1679,7 @@ export async function setDecisionScope(
         "การปักกติกาต้องมีคนยืนยัน ไม่มีทางปักโดยไม่ยืนยัน",
     );
   }
-  if (approval.code !== approval.secret) {
+  if (!timingSafeEqualStr(approval.code, approval.secret)) {
     throw new RequestError("approval_code ไม่ถูกต้อง — ไม่ได้เปลี่ยน scope ให้");
   }
 

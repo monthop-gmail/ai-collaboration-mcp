@@ -127,7 +127,12 @@ CREATE TABLE IF NOT EXISTS decisions (
 
   -- บริบทที่ผู้เรียกประกาศว่าทำงานแทนใครตอนลงมือ · NULL = ไม่ได้ประกาศ
   -- ไม่ใช่การยืนยันตัวตน ตรวจไม่ได้ (ไมเกรชัน 0006)
-  acting_context  TEXT
+  acting_context  TEXT,
+
+  -- วิธีที่ใช้ยืนยันตอนปิดใบ: approval_secret | none · NULL = ปิดก่อนมีช่องนี้ หรือยังไม่ปิด
+  -- `decided_by_sub` เผื่อไว้ให้ตัวตนที่ยืนยันแล้ว ยังไม่มีโค้ดเขียน (ไมเกรชัน 0008)
+  decided_by_method TEXT,
+  decided_by_sub    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_workspace
