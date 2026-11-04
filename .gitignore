@@ -16,3 +16,6 @@ dist/
 *tokens*.txt
 *.bak
 *.bak-*
+
+# dump ของ D1 — 15MB ต่อใบ ห้ามเข้า git เด็ดขาด (history ลบไม่ได้)
+backups/
