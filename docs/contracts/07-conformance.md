@@ -21,10 +21,15 @@
 | `test/discussion-filter.test.ts` | `quiet_for_days` บอกยอดที่ซ่อนเสมอ | [05](05-workspace-context.md) |
 | `test/workspace-health.test.ts` | handoff ค้างตามอายุของทั้งโต๊ะ · ผู้ลงมือไม่ตรงผู้ที่ระบุ | [05](05-workspace-context.md) |
 | `test/workspace-isolation.test.ts` | รายการแยกตาม workspace · ลงมือด้วย id ข้าม workspace ได้ (พฤติกรรมที่เป็นอยู่) | [01](01-work-records.md) |
+| `test/approval-hardening.test.ts` | เทียบรหัสแบบ constant-time · รหัสถูก → `human` + `approval_secret` · ไม่ส่ง → `relayed` + `none` · ไม่มีทางได้ `owner_signed` · รหัสผิดไม่ปิดใบ/ไม่เปลี่ยน scope · ทุกแถวมีคีย์ `decided_by_method`/`decided_by_sub` | [03](03-decisions.md) |
 | `test/readonly.test.ts` | เส้นอ่านอย่างเดียวผูกกับรหัสของมัน | [04](04-identity.md) |
 | `test/client-policy.test.ts`, `test/cross-task-guard.test.ts` | นโยบาย tool ต่อ client · คำเตือนข้ามใบ — เฉพาะ implementation นี้ ไม่ใช่สัญญากลาง | [06](06-module-manifest.md) |
 
 เทสต์ที่เหลือ (`jwt`, `vault`, `view`, `deployment-config`) เป็นเรื่องของ implementation นี้ ไม่ใช่สัญญา
+
+## MUST เพิ่มหลัง OAC-1
+- `decided_by_method`: ใบที่ยังไม่ปิดเป็น `null` และใบที่ปิดโดยไม่ส่งรหัสเป็น `"none"` — ล็อกโดย `test/approval-hardening.test.ts` "ชุดคีย์ของแถว decision" และ "ไม่ส่งรหัส → relayed + none" · โต๊ะที่สองต้องไม่ให้ `null` กับ `"none"` ปนกัน
+- ใบที่ปิดก่อน migration 0008 ต้องคงเป็น `null`: ไม่มีเทสต์ล็อกตรงข้อนี้ — ล็อกได้แค่ว่า migration ไม่มีคำสั่ง backfill
 
 ## Proposed (ยังไม่ implement) — ชุดรันเทียบข้ามโต๊ะ
 เทสต์ข้างบนเรียกฟังก์ชันภายในของโต๊ะนี้ อีกโต๊ะรันตรง ๆ ไม่ได้ ข้อเสนอ: ชุดเทสต์ black-box ที่คุยผ่าน MCP endpoint อย่างเดียว
@@ -38,3 +43,5 @@
 8. `get_workspace_context.waiting_for_you` — งานหนึ่งใบอยู่ถังเดียว และ `total` = ผลรวม
 9. `health.open_tasks`: `open = unstarted + parked`
 10. `capability` กรองตรงทั้งคำ ถามหลายค่าในครั้งเดียวได้ error
+11. ปิดใบโดยไม่ส่งรหัส → `decided_by_method = "none"` ไม่ใช่ `null`
+12. **เทสต์ลบของสิทธิ์รายบัญชี**: บัญชีที่โมดูลไม่อนุญาตเรียก write tool ตรงด้วย argument ที่ valid → ถูกปฏิเสธ **แม้สวิตช์ใน portal เปิด** (ดู [06](06-module-manifest.md) ข้อ 6)

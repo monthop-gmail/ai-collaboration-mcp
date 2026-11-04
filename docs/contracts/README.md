@@ -1,6 +1,6 @@
 # สัญญากลางของโต๊ะประสานงาน — ฉบับแรก (CTR-1)
 
-เอกสารนี้ถอดจาก**โค้ดของ repo นี้ตามที่เป็นอยู่** ที่ `main` @ `b797b93d` โต๊ะนี้คือ reference implementation
+เอกสารนี้ถอดจาก**โค้ดของ repo นี้ตามที่เป็นอยู่** ที่ `main` @ `b797b93d` (CTR-1) และอัปเดตที่ `main` @ `5b3dc02` หลัง OAC-1 (#49, merge `151f9f6a`) (CTR-2) โต๊ะนี้คือ reference implementation
 โต๊ะตัวที่สองต้อง implement ตามสเปกนี้ให้สลับกันได้
 
 **หลัก: สัญญาเป็นมาตรฐาน ไม่ใช่ตัวโมดูล** ผู้เรียก (AI/bot/คน) ผูกกับรูปร่างของ tool และผลลัพธ์ ไม่ผูกกับโค้ดหรือฐานข้อมูลของโต๊ะใดโต๊ะหนึ่ง
@@ -28,8 +28,8 @@
 |---|---|---|---|
 | ระเบียนงาน (discussion · task · handoff · decision · plan) | [01](01-work-records.md) | implemented | `schema.sql`, `src/db.ts` `postMessage`/`readMessages`, `src/db-work.ts` `createTask`/`updateTask`/`createHandoff`/`acceptHandoff`/`recordPlan` |
 | `blocked_kind` | [02](02-blocked-kind.md) | **proposed** | ไม่มีในโค้ด — มีแค่ `status = blocked` ใน `TASK_STATUSES` |
-| การตัดสินใจ + standing rules | [03](03-decisions.md) | implemented (ความหมายของ `human` แคบ ดูไฟล์) | `src/db-work.ts` `recordDecision`/`resolveDecision`/`setDecisionScope`/`readStandingRules` |
-| ตัวตนผู้เขียน | [04](04-identity.md) | implemented; รูปแบบ "บัญชี + ป้ายแอป" proposed | `src/identity.ts` `resolveAuthor`/`staticIdentityFor`/`nameForToken` |
+| การตัดสินใจ + standing rules + `decided_by_method` | [03](03-decisions.md) | implemented (`owner_signed` proposed · ความหมายของ `human` แคบ ดูไฟล์) | `src/db-work.ts` `recordDecision`/`resolveDecision`/`setDecisionScope`/`readStandingRules`, migration 0008, `test/approval-hardening.test.ts` |
+| ตัวตนผู้เขียน | [04](04-identity.md) | implemented; "บัญชี + ป้ายแอป" และกติกาเส้นเครื่อง proposed | `src/identity.ts` `resolveAuthor`/`staticIdentityFor`/`nameForToken`, `src/index.ts` `authorizeReadOnly`/`hasStaticBearer` |
 | `get_workspace_context` | [05](05-workspace-context.md) | implemented | `src/tools.ts`, `src/db.ts` `readWorkspaceContext`, `src/db-work.ts` `readOpenItems`/`readWorkspaceHealth` |
 | Module manifest | [06](06-module-manifest.md) | **proposed ทั้งไฟล์** | — |
 | Conformance | [07](07-conformance.md) | partial (มีเทสต์ของโต๊ะนี้; ชุดรันเทียบข้ามโต๊ะยัง proposed) | `test/*.test.ts` |
